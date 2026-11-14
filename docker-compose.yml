@@ -11,8 +11,8 @@ services:
       - NET_ADMIN
     environment:
       LABVIS_PORT: "8099"            # Weboberfläche: http://<host>:8099
-      LABVIS_USER: "admin"
-      LABVIS_PASSWORD: "${LABVIS_PASSWORD:-}"   # leer = ohne Anmeldung (nur im internen Netz!)
+      LABVIS_USER: "admin"          # Name des ersten Kontos
+      LABVIS_PASSWORD: "${LABVIS_PASSWORD:-}"   # legt beim ersten Start das Konto an; leer = Einrichtung im Browser
       TZ: "Europe/Berlin"
     volumes:
       - ./data:/data

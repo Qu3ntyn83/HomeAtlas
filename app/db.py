@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS scans(
   id INTEGER PRIMARY KEY, network TEXT, started REAL, finished REAL, hosts INTEGER DEFAULT 0,
   new INTEGER DEFAULT 0, status TEXT, log TEXT);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS users(
+  id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, pw TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'admin', created REAL, last_login REAL);
+CREATE TABLE IF NOT EXISTS sessions(
+  token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created REAL, expires REAL, ua TEXT);
 """
 
 JSON_COLS = {"ports", "meta", "http", "snmp", "guess", "config"}
@@ -65,6 +70,8 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        if 'role' not in [r[1] for r in c.execute("PRAGMA table_info(users)")]:
+            c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, v))
 

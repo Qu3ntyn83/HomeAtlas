@@ -18,6 +18,7 @@ const main = $('#main'), panel = $('#panel');
 async function api(method, url, body, raw) {
   const r = await fetch(url, {method, headers: body && !raw ? {'Content-Type': 'application/json'} : {},
     body: body ? (raw ? body : JSON.stringify(body)) : undefined});
+  if (r.status === 401) { location.href = '/login'; throw new Error('Nicht angemeldet'); }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch (e) { /* kein JSON */ }
@@ -40,6 +41,8 @@ const kidsOf = id => S.devices.filter(d => d.parent_id === id);
 const vlan = id => S.vlans.find(v => v.id === id);
 const vcol = id => (vlan(id) || {}).color || PAL.TRUNKB;
 const icon = d => '/api/icon/' + encodeURIComponent(d.icon || 'type-' + (d.type || 'other'));
+const addrsOf = d => (d.meta && d.meta.addrs) || [];
+const inVlan = (d, vid) => d.vlan_id === vid || addrsOf(d).some(a => a.vlan_id === vid);
 const vtag = v => v ? (v.vid != null ? 'VLAN ' + v.vid : v.name) : '';
 function topOf(id) { let d = dev(id), n = 0; while (d && d.parent_id && n++ < 8) d = dev(d.parent_id) || d; return d ? d.id : null; }
 function ago(t) {
@@ -59,6 +62,7 @@ async function load(silent) {
     S = await api('GET', '/api/state');
   } catch (e) { if (!silent) toast(e.message, true); return; }
   $('#title').textContent = S.settings.title || 'LabVis';
+  document.body.classList.toggle('ro', S.role === 'read');
   document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
   $('#badge').textContent = S.discoveries.filter(d => d.state === 'pending').length || '';
   $('#scanstate').textContent = S.scanner.running ? `Scan ${S.scanner.running} · ${S.scanner.phase}` : '';
@@ -104,7 +108,7 @@ function chipH(c) {
 function chipSvg(c, x, y, w, parentVlan) {
   const h = chipH(c), col = vcol(c.vlan_id), gk = kidsOf(c.id);
   const stroke = c.vlan_id && c.vlan_id !== parentVlan ? col : PAL.BORDER;
-  const off = vfilter && c.vlan_id !== vfilter ? ' off' : '';
+  const off = vfilter && !inVlan(c, vfilter) ? ' off' : '';
   const tag = c.meta && c.meta.vmid ? (c.type === 'vm' ? 'VM ' : 'CT ') + c.meta.vmid : '';
   const tagW = tag ? tw(tag, 10.5, 400, true) + 8 : 0;
   let s = `<g class="chip${off}" data-id="${c.id}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">` +
@@ -115,7 +119,7 @@ function chipSvg(c, x, y, w, parentVlan) {
     statusDot(c, w - 11, 16, 3.6) +
     T(40, 36, fit(c.note || c.os || TYPES[c.type] || '', w - 50, 11, 400), {size: 11, fill: PAL.MUTED});
   if (c.ip || c.hostname) {
-    const a = c.url && c.hostname ? c.hostname : [c.ip, c.hostname].filter(Boolean).join(' · ');
+    const a = c.url && c.hostname ? c.hostname : [c.ip, addrsOf(c).length ? '+' + addrsOf(c).length : '', c.hostname].filter(Boolean).join(' · ');
     s += T(40, 51, fit(a, w - 50, 11, 400, true), {size: 11, mono: true, fill: c.url && c.hostname ? PAL.LINK : col});
   }
   gk.forEach((g, i) => {
@@ -140,7 +144,8 @@ function buildCard(d) {
   const col = vcol(d.vlan_id), stroke = trunk || !d.vlan_id ? PAL.TRUNKB : col;
   const type = TYPES[d.type] || d.type;
   const tabW = Math.round(tw(d.name, 19, 700) + tw('\u00a0·\u00a0' + type, 13, 500) + 44);
-  const addr = [d.ip, d.hostname].filter(Boolean).join(' · ');
+  const extra = addrsOf(d).length;
+  const addr = [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
   const l1 = d.model || d.note || '', l3 = d.os || (d.model ? d.note : '') || '';
   const headW = 70 + Math.max(tw(l1, 14, 500), tw(addr, 12.5, 400, true), tw(l3, 12)) + 40;
   // Blöcke: Gruppen (falls vorhanden) bleiben zusammen, sonst jeder Chip einzeln
@@ -278,7 +283,7 @@ function autoLayout(all) {
     }
   }
   for (const m of moved) { const d = dev(m.id); d.x = m.x; d.y = m.y; }
-  if (moved.length) api('POST', '/api/positions/save', moved).catch(e => toast(e.message, true));
+  if (moved.length && !ro()) api('POST', '/api/positions/save', moved).catch(e => toast(e.message, true));
 }
 function fitView() {
   const cs = [...cards.values()];
@@ -292,7 +297,7 @@ function fitView() {
 }
 function applyCam() { const w = $('#world'); if (w) w.setAttribute('transform', `translate(${cam.x.toFixed(1)},${cam.y.toFixed(1)}) scale(${cam.k.toFixed(4)})`); }
 function cardNode(c) {
-  const off = vfilter && c.d.vlan_id !== vfilter && !S.devices.some(k => topOf(k.id) === c.id && k.vlan_id === vfilter) ? ' off' : '';
+  const off = vfilter && !inVlan(c.d, vfilter) && !S.devices.some(k => topOf(k.id) === c.id && inVlan(k, vfilter)) ? ' off' : '';
   return `<g class="card${off}${sel === c.id ? ' sel' : ''}" data-id="${c.id}" transform="translate(${c.x},${c.y})">${c.svg}</g>`;
 }
 function renderTopo() {
@@ -380,7 +385,7 @@ function bindCanvas() {
     busy = false;
     if (mode === 'card' && moved) {
       const d = dev(card.id); d.x = card.x; d.y = card.y;
-      api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
+      if (!ro()) api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
     } else if (!moved) {
       const t = start.target, chip = t.closest('.chip'), cn = t.closest('.card'), ln = t.closest('.link');
       if (chip) showDevice(+chip.dataset.id); else if (cn) showDevice(+cn.dataset.id);
@@ -410,6 +415,7 @@ function showDevice(id, keep) {
     `<span class="muted">· zuletzt gesehen: ${ago(d.last_seen)}</span></div>` +
     `<div class="acts">${d.url ? `<a class="btn pri" href="${esc(d.url)}" target="_blank" rel="noopener">Öffnen ↗</a>` : ''}` +
     `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button>` +
+    `<button class="btn" data-act="addAddr" data-id="${id}">+ Adresse</button><button class="btn" data-act="merge" data-id="${id}">Zusammenführen</button>` +
     `<button class="btn" data-act="newDevice" data-parent="${id}">+ Kind</button><button class="btn bad" data-act="delDevice" data-id="${id}">Löschen</button></div>` +
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
     fact('MAC', d.mac && `<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) +
@@ -418,6 +424,11 @@ function showDevice(id, keep) {
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
     fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>';
+  if (addrsOf(d).length) h += `<h3>Weitere Adressen (${addrsOf(d).length})</h3>` + addrsOf(d).map((a, n) => { const av = vlan(a.vlan_id);
+    return `<div class="rowl" style="flex-wrap:wrap"><span class="dot ${a.up === true ? 'online' : a.up === false ? 'offline' : ''}"></span><span class="mono">${esc(a.ip || '–')}</span>` +
+      `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
+      `<button class="btn sm" style="margin-left:auto" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button>` +
+      `${a.mac ? `<span class="mono faint" style="flex-basis:100%;font-size:11.5px;padding-left:17px">${esc(a.mac)}${a.vendor ? ' · ' + esc(a.vendor) : ''}</span>` : ''}</div>`; }).join('');
   if ((m.hw || []).length) h += '<h3>Hardware</h3>' + m.hw.map(t => `<div class="tile"><img src="/api/icon/${esc(t.icon || 'glyph-cpu')}" alt=""><div>` +
     `<span class="lab">${esc(t.label)}</span><br><b>${esc(t.value)}</b><small>${esc(t.sub)}</small></div></div>`).join('');
   if ((m.pools || []).length) h += '<h3>Storage</h3>' + m.pools.map(p => `<div class="box" style="margin-bottom:6px"><b>${esc(p.name)}</b> <span class="muted">${esc(p.layout)}</span>` +
@@ -468,6 +479,7 @@ function formHtml(title, fields, val, extra = '') {
     `<div class="acts"><button class="btn pri" type="submit">Speichern</button><button class="btn" type="button" data-act="cancel">Abbrechen</button>${extra}</div></form>`;
 }
 function openForm(title, fields, val, onSave, extra, keepSel) {
+  if (ro()) return;
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
   $('form', panel).addEventListener('submit', e => {
@@ -538,7 +550,7 @@ function bindRack(body) {
   const units = +body.dataset.units, rid = +body.dataset.rack;
   const occupied = (u, hh, skip) => S.devices.some(d => d.rack_id === rid && d.id !== skip && d.rack_u && u < d.rack_u + (d.rack_height || 1) && d.rack_u < u + hh);
   body.addEventListener('click', e => {
-    if (e.target.closest('.rdev')) return;
+    if (ro() || e.target.closest('.rdev')) return;
     const u = units - Math.floor((e.clientY - body.getBoundingClientRect().top) / UH);
     if (u < 1 || u > units || occupied(u, 1)) return;
     const free = S.devices.filter(d => !d.parent_id && !d.rack_id);
@@ -555,7 +567,7 @@ function bindRack(body) {
     el.addEventListener('pointerdown', e => { sy = e.clientY; top0 = parseFloat(el.style.top); moved = false; el.setPointerCapture(e.pointerId); });
     el.addEventListener('pointermove', e => {
       if (sy == null) return;
-      if (!moved && Math.abs(e.clientY - sy) < 5) return;
+      if (ro() || (!moved && Math.abs(e.clientY - sy) < 5)) return;
       moved = true; busy = true; el.classList.add('drag'); el.style.top = (top0 + e.clientY - sy) + 'px';
     });
     el.addEventListener('pointerup', () => {
@@ -572,14 +584,18 @@ function bindRack(body) {
 
 // ------------------------------------------------------------ Netzwerke
 function renderNets() {
-  const byIp = new Map(S.devices.filter(d => d.ip).map(d => [d.ip, d]));
+  const byIp = new Map();
+  for (const d of S.devices) {
+    for (const a of addrsOf(d)) if (a.ip) byIp.set(a.ip, {id: d.id, name: d.name + (a.label ? ' · ' + a.label : ''), status: a.up === true ? 'online' : a.up === false ? 'offline' : 'unknown'});
+  }
+  for (const d of S.devices) if (d.ip) byIp.set(d.ip, addrsOf(d).length && d.meta.up0 !== undefined ? {id: d.id, name: d.name, status: d.meta.up0 ? 'online' : 'offline'} : d);
   const pend = new Map(S.discoveries.filter(d => d.state === 'pending').map(d => [d.ip, d]));
   let h = `<div class="page"><div class="bar"><h2>Netzwerke &amp; VLANs</h2><button class="btn pri" data-act="newVlan">+ Netzwerk</button><span class="grow"></span>` +
     `<span class="muted">Auto-Scan alle ${esc(S.settings.scan_interval_min)} min</span></div>` +
     (S.scanner.privileged ? '' : '<div class="hint" style="margin-bottom:14px">Der Container läuft ohne Root-Rechte – MAC-Adressen und Hersteller werden so nicht erkannt.</div>') +
     '<div class="cards">';
   for (const v of S.vlans) {
-    const devs = S.devices.filter(d => d.vlan_id === v.id);
+    const devs = S.devices.filter(d => inVlan(d, v.id));
     let grid = '';
     const m = /^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/.exec(v.subnet || '');
     if (m && +m[2] >= 22 && +m[2] <= 30) {
@@ -628,7 +644,7 @@ function renderFinds() {
       `<div class="pl">${(d.ports || []).map(p => `<span class="pill">${p}</span>`).join('')}</div>` +
       (g.suggestions || []).map(s => `<div class="sug"><b>${esc(s.title)}</b><small>${esc(s.reason)} · liest: ${esc(s.reads)}</small></div>`).join('') +
       `<div class="acts" style="margin-bottom:0">` + (d.state === 'pending' ?
-        `<button class="btn sm pri" data-act="approve" data-id="${d.id}">Übernehmen</button><button class="btn sm" data-act="ignore" data-id="${d.id}">Ignorieren</button>` :
+        `<button class="btn sm pri" data-act="approve" data-id="${d.id}">Übernehmen</button><button class="btn sm" data-act="attach" data-id="${d.id}">Zu Gerät hinzufügen</button><button class="btn sm" data-act="ignore" data-id="${d.id}">Ignorieren</button>` :
         `<button class="btn sm" data-act="restore" data-id="${d.id}">Wiederherstellen</button>`) + '</div></div>';
   };
   main.innerHTML = `<div class="page"><div class="bar"><h2>Funde</h2>${pend.length ? `<button class="btn pri" data-act="approve" data-id="all">Alle ${pend.length} übernehmen</button>` : ''}` +
@@ -676,22 +692,57 @@ function integForm(i) {
 }
 
 // ------------------------------------------------------------ System
+const ROLE = {read: 'Lesen', write: 'Ändern', admin: 'Admin'};
+const roleOpts = cur => Object.entries(ROLE).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${v}</option>`).join('');
 function renderSystem() {
-  const s = S.settings;
-  main.innerHTML = `<div class="page" style="max-width:760px"><div class="bar"><h2>System</h2></div><div class="box"><form class="f" id="setf">` +
+  const s = S.settings, admin = S.role === 'admin';
+  const vals = f => { const d = {}; for (const el of f.elements) if (el.name) d[el.name] = el.value; return d; };
+  let h = `<div class="page" style="max-width:760px"><div class="bar"><h2>System</h2></div>` +
+    `<h3 class="faint" style="margin-top:0">Konto</h3><div class="box"><div class="rowl" style="border:0;padding:0 0 10px">Angemeldet als <b>${esc(S.user)}</b>` +
+    `<span class="pill">${ROLE[S.role]}</span><button class="btn sm" style="margin-left:auto" data-act="logout">Abmelden</button></div><form class="f" id="pwf"><div class="two">` +
+    `<label>Aktuelles Passwort<input name="current" type="password" autocomplete="current-password" required></label>` +
+    `<label>Neues Passwort<input name="new" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
+    `<div class="acts" style="margin:0"><button class="btn">Passwort ändern</button></div></form></div>`;
+  if (admin) h += `<h3 class="faint" style="margin-top:24px">Benutzerverwaltung</h3><div class="box"><div id="users" class="muted">lädt …</div>` +
+    `<p class="muted" style="font-size:12.5px;margin:10px 0"><b>Lesen</b>: alles ansehen · <b>Ändern</b>: dokumentieren, scannen, Anbindungen pflegen · ` +
+    `<b>Admin</b>: zusätzlich Benutzer, Einstellungen, Export</p><form class="f" id="uf"><div class="two">` +
+    `<label>Neuer Benutzername<input name="username" autocomplete="off" autocapitalize="none" required></label>` +
+    `<label>Recht<select name="role">${roleOpts('read')}</select></label></div>` +
+    `<label>Passwort (mind. 10 Zeichen)<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>` +
+    `<div class="acts" style="margin:0"><button class="btn pri">Benutzer anlegen</button></div></form></div>` +
+    `<h3 class="faint" style="margin-top:24px">Einstellungen</h3><div class="box"><form class="f" id="setf">` +
     `<label>Titel<input name="title" value="${esc(s.title)}"></label><div class="two"><label>Scan-Intervall (Minuten)<input name="scan_interval_min" type="number" min="5" value="${esc(s.scan_interval_min)}"></label>` +
     `<label>Sync-Intervall der Anbindungen (Minuten)<input name="sync_interval_min" type="number" min="1" value="${esc(s.sync_interval_min)}"></label></div>` +
     `<label>SNMP-Community für den Scan<input name="snmp_community" value="${esc(s.snmp_community)}"></label>` +
-    `<div class="acts"><button class="btn pri">Speichern</button></div></form></div>` +
+    `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button></div></form></div>` +
     `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><div class="acts" style="margin:0"><a class="btn" href="/api/export" download>Export (JSON)</a>` +
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
-    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>` +
-    `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks</p></div>`;
-  $('#setf').addEventListener('submit', e => {
+    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>`;
+  else if (S.role === 'write') h += `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>`;
+  main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks</p></div>`;
+  $('#pwf').addEventListener('submit', async e => {
     e.preventDefault();
-    const data = {}; for (const el of e.target.elements) if (el.name) data[el.name] = el.value;
-    run(() => api('POST', '/api/settings/save', data), 'Gespeichert');
+    try { await api('POST', '/api/auth/password', vals(e.target)); e.target.reset(); toast('Passwort geändert – andere Sitzungen wurden abgemeldet'); }
+    catch (x) { toast(x.message, true); }
   });
+  if (!admin) return;
+  $('#uf').addEventListener('submit', async e => {
+    e.preventDefault();
+    try { await api('POST', '/api/auth/users', vals(e.target)); toast('Benutzer angelegt'); renderSystem(); } catch (x) { toast(x.message, true); }
+  });
+  $('#setf').addEventListener('submit', e => { e.preventDefault(); run(() => api('POST', '/api/settings/save', vals(e.target)), 'Gespeichert'); });
+  api('GET', '/api/auth/users').then(r => {
+    const box = $('#users'); if (!box) return;
+    box.className = '';
+    box.innerHTML = r.users.map(u => `<div class="rowl" style="flex-wrap:wrap"><b>${esc(u.username)}</b><span class="muted" style="font-size:12px">zuletzt: ${ago(u.last_login)}</span>` +
+      `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">` + (u.id === r.me ? `<span class="pill">${ROLE[u.role]} · du</span>` :
+        `<select class="inp usel" data-id="${u.id}" style="width:auto;padding:3px 6px;font-size:12.5px" aria-label="Recht von ${esc(u.username)}">${roleOpts(u.role)}</select>` +
+        `<button class="btn sm" data-act="pwUser" data-id="${u.id}" data-name="${esc(u.username)}">Passwort</button>` +
+        `<button class="btn sm bad" data-act="delUser" data-id="${u.id}" data-name="${esc(u.username)}">Löschen</button>`) + '</span></div>').join('');
+    box.querySelectorAll('.usel').forEach(sel2 => sel2.addEventListener('change', async () => {
+      try { await api('PUT', '/api/auth/users/' + sel2.dataset.id, {role: sel2.value}); toast('Recht geändert'); } catch (x) { toast(x.message, true); renderSystem(); }
+    }));
+  }).catch(() => {});
 }
 
 // ------------------------------------------------------------ Aktionen
@@ -706,6 +757,25 @@ const ACT = {
   newDevice: d => deviceForm({type: d.parent ? 'container' : 'server', parent_id: d.parent || '', rack_height: 1}),
   editDevice: d => deviceForm(dev(+d.id)),
   delDevice: d => { const x = dev(+d.id), n = kidsOf(x.id).length; if (confirm(`„${x.name}“${n ? ` samt ${n} enthaltenen Einträgen` : ''} löschen?`)) { closePanel(); run(() => api('DELETE', '/api/devices/' + x.id)); } },
+  addAddr: d => { const x = dev(+d.id); sel = x.id; openForm('Weitere Adresse', [[['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']],
+    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], {},
+    data => api('POST', `/api/devices/${x.id}/addrs`, data), '', true); },
+  delAddr: d => { if (confirm('Adresse entfernen? Beim nächsten Scan taucht sie wieder als Fund auf.')) run(() => api('DELETE', `/api/devices/${d.id}/addrs/${d.idx}`)); },
+  merge: d => {
+    const x = dev(+d.id); sel = x.id;
+    const cand = S.devices.filter(o => o.id !== x.id && !['app', 'service', 'internet'].includes(o.type)).map(o => [o.id, o.name + (o.ip ? ' · ' + o.ip : '')]);
+    if (!cand.length) return toast('Kein zweites Gerät vorhanden');
+    openForm(`„${esc(x.name)}“ zusammenführen`, [['other_id', 'Dieses Gerät geht in „' + esc(x.name) + '“ auf', 'select', cand]], {},
+      data => api('POST', `/api/devices/${x.id}/merge`, data),
+      '<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">IP und MAC des gewählten Geräts werden zu einer weiteren Adresse. Kabel, enthaltene Geräte und Anbindungen wandern mit, der zweite Eintrag wird entfernt.</p>', true);
+  },
+  attach: d => {
+    const f = S.discoveries.find(z => z.id === +d.id);
+    const cand = S.devices.filter(o => !['app', 'service', 'internet'].includes(o.type)).map(o => [o.id, o.name + (o.ip ? ' · ' + o.ip : '')]);
+    if (!cand.length) return toast('Noch kein Gerät dokumentiert');
+    openForm(`${esc(f.ip)} hinzufügen zu`, [['device_id', 'Gerät', 'select', cand]], {},
+      async data => { await api('POST', `/api/devices/${data.device_id}/attach/${f.id}`); });
+  },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
@@ -728,12 +798,22 @@ const ACT = {
   editInteg: d => integForm(S.integrations.find(i => i.id === +d.id)),
   delInteg: d => { if (confirm('Anbindung löschen? Bereits ausgelesene Geräte bleiben erhalten.')) run(() => api('DELETE', '/api/integrations/' + d.id)); },
   sync: d => run(async () => { toast('Synchronisiere …'); const r = await api('POST', `/api/integrations/${d.id}/sync`); toast(r.status, r.status.startsWith('Fehler')); }),
+  logout: async () => { await fetch('/api/auth/logout', {method: 'POST'}); location.href = '/login'; },
+  pwUser: async d => {
+    const pw = prompt(`Neues Passwort für „${d.name}“ (mindestens 10 Zeichen). Das Konto wird überall abgemeldet.`);
+    if (!pw) return;
+    try { await api('PUT', '/api/auth/users/' + d.id, {password: pw}); toast('Passwort gesetzt'); } catch (x) { toast(x.message, true); }
+  },
+  delUser: async d => {
+    if (!confirm(`Benutzer „${d.name}“ löschen?`)) return;
+    try { await api('DELETE', '/api/auth/users/' + d.id); renderSystem(); } catch (x) { toast(x.message, true); }
+  },
   pick: d => {
     const f = document.createElement('input'); f.type = 'file'; f.accept = d.kind === 'restore' ? '.json' : '.yaml,.yml';
     f.onchange = async () => {
       const text = await f.files[0].text();
       if (d.kind === 'restore' && !confirm('Alle vorhandenen Daten ersetzen?')) return;
-      run(() => d.kind === 'restore' ? api('POST', '/api/restore', JSON.parse(text)) : api('POST', '/api/import/inventory', text, true), 'Importiert');
+      run(() => d.kind === 'restore' ? api('POST', '/api/restore/all', JSON.parse(text)) : api('POST', '/api/import/inventory', text, true), 'Importiert');
       camSet = false;
     };
     f.click();
@@ -755,9 +835,13 @@ const ACT = {
     a.download = 'homelab.svg'; a.click();
   },
 };
+const READ_OK = new Set(['close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout']);
+const ro = () => S && S.role === 'read';
+document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
   if (!b || !ACT[b.dataset.act]) return;
+  if (ro() && !READ_OK.has(b.dataset.act)) return;
   if (b.tagName === 'A') e.preventDefault();
   ACT[b.dataset.act](b.dataset, b);
 });
@@ -766,5 +850,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hid
 (async () => {
   try { await Promise.all(['400 13px "Fira Sans"', '600 13px "Fira Sans"', '700 19px "Fira Sans"', '500 13px "Fira Sans"', '400 12px "Fira Code"', '500 12px "Fira Code"'].map(f => document.fonts.load(f))); } catch (e) { /* Fallback-Schrift */ }
   await load();
-  setInterval(() => { if (!busy && panelMode !== 'form' && !document.hidden) load(true); }, 15000);
+  setInterval(() => {
+    const typing = /INPUT|SELECT|TEXTAREA/.test((document.activeElement || {}).tagName || '');   // Eingaben nicht überschreiben
+    if (!busy && panelMode !== 'form' && !typing && !document.hidden) load(true);
+  }, 15000);
 })();
