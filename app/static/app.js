@@ -6,6 +6,8 @@ const SPEED_W = {'100M': 1.4, '1G': 2.4, '2.5G': 3.8, '5G': 5.5, '10G': 8, '25G'
 const TYPES = {internet: 'Internet', router: 'Router', firewall: 'Firewall', switch: 'Switch', ap: 'Access Point',
   hypervisor: 'Hypervisor', server: 'Server', nas: 'NAS', workstation: 'Workstation', client: 'Client', iot: 'IoT',
   printer: 'Drucker', vm: 'VM', container: 'Container', app: 'App', service: 'Dienst', other: 'Gerät',
+  light: 'Lampe', plug: 'Steckdose', sensor: 'Sensor', thermostat: 'Thermostat', blind: 'Rollladen', lock: 'Türschloss', vacuum: 'Saugroboter',
+  camera: 'Kamera', speaker: 'Lautsprecher', tv: 'TV / Medien', group: 'Bereich',
   patchpanel: 'Patchpanel', shelf: 'Rackboden', blank: 'Blende', cablemgmt: 'Kabelführung'};
 const PASSIVE = new Set(['patchpanel', 'shelf', 'blank', 'cablemgmt']);   // Rack-Platzhalter: nur im Rack, nicht in der Topologie
 const onShelf = id => S.devices.filter(d => (d.meta || {}).shelf === id);
@@ -146,11 +148,11 @@ function chipSvg(c, x, y, w, parentVlan) {
   });
   return s + '</g>';
 }
-function folder(w, h, tabW, stroke) {
+function folder(w, h, tabW, stroke, dash) {
   const r = 10, t = TAB, s = 14;
   return `<path class="frame" d="M${r},0 H${tabW - s - 4} q6,0 9,5 l${s - 5},${t - 10} q3,5 9,5 H${w - r} a${r},${r} 0 0 1 ${r},${r} ` +
     `V${h - r} a${r},${r} 0 0 1 -${r},${r} H${r} a${r},${r} 0 0 1 -${r},-${r} V${r} a${r},${r} 0 0 1 ${r},-${r} z" ` +
-    `fill="${PAL.PANEL}" stroke="${stroke}" stroke-width="1.6"/>`;
+    `fill="${dash ? '#0e141c' : PAL.PANEL}" stroke="${stroke}" stroke-width="1.6"${dash ? ' stroke-dasharray="9 6"' : ''}/>`;
 }
 function buildCard(d) {
   const kids = kidsOf(d.id), hw = (d.meta && d.meta.hw) || [];
@@ -159,8 +161,10 @@ function buildCard(d) {
   const type = TYPES[d.type] || d.type;
   const tabW = Math.round(tw(d.name, 19, 700) + tw('\u00a0·\u00a0' + type, 13, 500) + 44);
   const extra = addrsOf(d).length;
-  const addr = [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
-  const l1 = d.model || d.note || '', l3 = d.os || (d.model ? d.note : '') || '';
+  const grp = d.type === 'group', on = kids.filter(k => k.status === 'online').length;
+  const addr = grp ? '' : [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
+  const l1 = grp ? (d.note || `${kids.length} ${kids.length === 1 ? 'Gerät' : 'Geräte'}`) : d.model || d.note || '';
+  const l3 = grp ? (kids.length ? `${d.note ? kids.length + ' Geräte · ' : ''}${on} online` : 'noch leer – Geräte auswählen und „Gruppieren“') : d.os || (d.model ? d.note : '') || '';
   const headW = Math.max(70 + Math.max(tw(l1, 14, 500), tw(addr, 12.5, 400, true), tw(l3, 12)) + 40,
     ssidsOf(d.id).reduce((a, w) => a + tw(w.ssid, 11.5, 500, true) + 40, 0) + 2 * PAD);
   // Blöcke: Gruppen (falls vorhanden) bleiben zusammen, sonst jeder Chip einzeln
@@ -180,7 +184,7 @@ function buildCard(d) {
   const w = Math.ceil(Math.max(tabW + 60, headW, has ? cols * cw + (cols - 1) * GAP + 2 * PAD : 0));
   cw = (w - 2 * PAD - (cols - 1) * GAP) / cols;
   let s = T(16, 21, d.name, {size: 19, weight: 700}) + T(16 + tw(d.name, 19, 700), 21, '\u00a0·\u00a0' + type, {size: 13, weight: 500, fill: PAL.MUTED});
-  s += IMG(d.icon || 'type-' + d.type, 18, TAB + 15, 38) + statusDot(d, w - 18, TAB + 20);
+  s += IMG(d.icon || 'type-' + d.type, 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20));
   s += T(70, TAB + 29, l1, {size: 14, weight: 500}) + T(70, TAB + 47, addr, {size: 12.5, mono: true, fill: d.vlan_id ? col : PAL.MUTED}) +
     T(70, TAB + 63, l3, {size: 12, fill: PAL.MUTED});
   let y = TAB + 80;
@@ -215,7 +219,7 @@ function buildCard(d) {
     if (b.title) colY[ci] += 6;
   }
   const h = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : TAB + 78 + (ssids.length ? 32 : 0));
-  s = folder(w, h, tabW, stroke) + s;
+  s = folder(w, h, tabW, stroke, grp) + s;
   return {id: d.id, d, w, h, tabW, x: d.x, y: d.y, svg: s};
 }
 
@@ -337,7 +341,7 @@ function bulkBar() {
   let b = $('#bulk');
   if (!multi.size || ro()) { if (b) b.remove(); return; }
   if (!b) { b = document.createElement('div'); b.id = 'bulk'; document.body.appendChild(b); }
-  b.innerHTML = `<b>${multi.size} ausgewählt</b><button class="btn sm pri" data-act="bulkEdit">Ändern</button>` +
+  b.innerHTML = `<b>${multi.size} ausgewählt</b><button class="btn sm pri" data-act="bulkEdit">Ändern</button><button class="btn sm" data-act="bulkGroup">Gruppieren</button>` +
     (multi.size > 1 ? '<button class="btn sm" data-act="bulkMerge">Zusammenführen</button>' : '') +
     '<button class="btn sm bad" data-act="bulkDel">Löschen</button><button class="btn sm" data-act="bulkClear">Aufheben</button>';
 }
@@ -362,7 +366,7 @@ function renderTopo() {
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
     `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
     `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
-    `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
+    `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
   if (!camSet) { fitView(); camSet = true; } else applyCam();
   bindCanvas();
@@ -470,7 +474,8 @@ function showDevice(id, keep) {
     `<div class="acts">${d.url ? `<a class="btn pri" href="${esc(d.url)}" target="_blank" rel="noopener">Öffnen ↗</a>` : ''}` +
     `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="wlan">WLAN-Verbindung</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="api">API-Verbindung</button>` +
     `<button class="btn" data-act="addAddr" data-id="${id}">+ Adresse</button><button class="btn" data-act="merge" data-id="${id}">Zusammenführen</button>` +
-    `<button class="btn" data-act="newDevice" data-parent="${id}">+ Kind</button><button class="btn bad" data-act="delDevice" data-id="${id}">Löschen</button></div>` +
+    `<button class="btn" data-act="newDevice" data-parent="${id}">+ Kind</button>${d.type === 'group' ? `<button class="btn" data-act="groupAdd" data-id="${id}">Geräte hinzufügen</button>` : ''}` +
+    `<button class="btn bad" data-act="delDevice" data-id="${id}">${d.type === 'group' ? 'Bereich auflösen' : 'Löschen'}</button></div>` +
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
     fact('MAC', d.mac && `<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) +
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
@@ -542,7 +547,7 @@ function formHtml(title, fields, val, extra = '') {
     `<div class="acts"><button class="btn pri" type="submit">Speichern</button><button class="btn" type="button" data-act="cancel">Abbrechen</button>${extra}</div></form>`;
 }
 const BUILTIN_ICONS = ['type-server', 'type-hypervisor', 'type-switch', 'type-router', 'type-firewall', 'type-nas', 'type-ap', 'type-workstation', 'type-client',
-  'type-iot', 'type-printer', 'type-vm', 'type-container', 'type-app', 'type-service', 'type-internet', 'type-patchpanel', 'type-shelf', 'type-other',
+  'type-iot', 'type-light', 'type-plug', 'type-sensor', 'type-thermostat', 'type-blind', 'type-lock', 'type-vacuum', 'type-camera', 'type-speaker', 'type-tv', 'type-group', 'type-printer', 'type-vm', 'type-container', 'type-app', 'type-service', 'type-internet', 'type-patchpanel', 'type-shelf', 'type-other',
   'glyph-cpu', 'glyph-ram', 'glyph-ssd', 'glyph-hdd', 'glyph-nic', 'glyph-gpu', 'glyph-shield', 'glyph-antenna'];
 function iconHelp(inp) {
   // Hilfe unter dem Icon-Feld: Vorschau, Link zur Icon-Übersicht, eingebaute Symbole zum Antippen
@@ -619,7 +624,7 @@ function rackBlock(d, r) {
     `<img src="${icon(d)}" alt=""><span class="dot ${d.status}"></span><b>${esc(d.name)}</b><span class="ip">${esc(d.ip || d.model || '')}</span></div>`;
 }
 function renderRacks() {
-  const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d) && !['internet', 'client', 'iot', 'workstation'].includes(d.type));
+  const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d) && !['internet', 'client', 'iot', 'workstation', 'group', 'light', 'plug', 'sensor', 'thermostat', 'blind', 'lock', 'vacuum', 'camera', 'speaker', 'tv'].includes(d.type));
   let h = `<div class="page" style="max-width:none"><div class="bar"><h2>Racks</h2><button class="btn pri" data-act="newRack">+ Rack</button>` +
     `<span class="muted">Ziehen verschiebt · freie Höheneinheit antippen zum Einbauen von Geräten, Patchpanels, Rackböden und Blenden</span></div>`;
   if (!S.racks.length) h += '<div class="hint">Noch kein Rack angelegt.</div>';
@@ -648,7 +653,7 @@ function bindRack(body) {
     if (ro() || e.target.closest('.rdev')) return;
     const u = units - Math.floor((e.clientY - body.getBoundingClientRect().top) / UH);
     if (u < 1 || u > units || occupied(u, 1)) return;
-    const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d));
+    const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d) && d.type !== 'group');
     // Erst die Art wählen (ohne Vorauswahl), dann erscheinen nur die dazu passenden Felder
     const WHAT = [['', '– bitte wählen –'], ...(free.length ? [['device', 'Vorhandenes Gerät']] : []), ['patchpanel', 'Patchpanel'], ['shelf', 'Rackboden'],
       ['blank', 'Blende'], ['cablemgmt', 'Kabelführung']];
@@ -958,7 +963,7 @@ const ACT = {
   vfilter: d => { vfilter = vfilter === +d.id ? null : +d.id; renderTopo(); },
   newDevice: d => deviceForm({type: d.parent ? 'container' : 'server', parent_id: d.parent || '', rack_height: 1}),
   editDevice: d => deviceForm(dev(+d.id)),
-  delDevice: d => { const x = dev(+d.id), n = kidsOf(x.id).length; if (confirm(`„${x.name}“${n ? ` samt ${n} enthaltenen Einträgen` : ''} löschen?`)) { closePanel(); run(() => api('DELETE', '/api/devices/' + x.id)); } },
+  delDevice: d => { const x = dev(+d.id), n = kidsOf(x.id).length; if (confirm(x.type === 'group' ? `Bereich „${x.name}“ auflösen? Die ${n} Geräte darin bleiben erhalten.` : `„${x.name}“${n ? ` samt ${n} enthaltenen Einträgen` : ''} löschen?`)) { closePanel(); run(() => api('DELETE', '/api/devices/' + x.id)); } },
   addAddr: d => { const x = dev(+d.id); sel = x.id; openForm('Weitere Adresse', [[['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']],
     ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], {},
     data => api('POST', `/api/devices/${x.id}/addrs`, data), '', true); },
@@ -1027,13 +1032,37 @@ const ACT = {
       '<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">Die anderen Einträge gehen in diesem auf: Ihre Adressen werden zu weiteren Adressen, Kabel und enthaltene Geräte wandern mit. Das lässt sich nicht rückgängig machen.</p>');
   },
   shelfAdd: d => {
-    const sh = dev(+d.id), free = S.devices.filter(x => !x.parent_id && !x.rack_id && !shelfOf(x) && !PASSIVE.has(x.type));
+    const sh = dev(+d.id), free = S.devices.filter(x => !x.parent_id && !x.rack_id && !shelfOf(x) && !PASSIVE.has(x.type) && x.type !== 'group');
     if (!free.length) return toast('Kein freies Gerät vorhanden');
     sel = sh.id;
     openForm(`Auf „${esc(sh.name)}“ stellen`, [['dev', 'Gerät', 'select', free.map(x => [x.id, x.name])]], {}, data => api('PUT', '/api/devices/' + data.dev, {meta: {shelf: sh.id}}), '', true);
   },
   shelfRemove: d => run(() => api('PUT', '/api/devices/' + d.id, {meta: {shelf: null}})),
   ppPorts: d => { const n = prompt('Anzahl der Ports (1–96):', (dev(+d.id).meta || {}).ports_n || 24); if (n) run(() => api('PUT', '/api/devices/' + d.id, {meta: {ports_n: Math.min(96, Math.max(1, +n || 24))}})); },
+  newGroup: () => openForm('Neuer Bereich', [['name', 'Name (z. B. Smarthome-Lampen)'], ['note', 'Beschreibung'], ['vlan_id', 'Netzwerk (für die Rahmenfarbe)', 'select', vlanOpts()], ['icon', 'Icon']],
+    {icon: 'type-group'}, async data => { if (!data.name) throw new Error('Name fehlt'); sel = (await api('POST', '/api/devices', {...data, type: 'group'})).id; }, '', true),
+  groupAdd: d => {
+    const g = dev(+d.id), cand = S.devices.filter(x => !x.parent_id && x.id !== g.id && x.type !== 'group' && !PASSIVE.has(x.type) && x.type !== 'internet');
+    if (!cand.length) return toast('Keine eigenständigen Geräte vorhanden');
+    sel = g.id;
+    openForm(`Zu „${esc(g.name)}“ hinzufügen`, [['ids', 'Geräte (Mehrfachauswahl)', 'multi', cand.map(x => [x.id, x.name + (x.ip ? ' · ' + x.ip : '')])]], {ids: []},
+      async data => { if (!data.ids.length) throw new Error('Kein Gerät gewählt'); for (const id of data.ids) await api('PUT', '/api/devices/' + id, {parent_id: g.id}); }, '', true);
+  },
+  bulkGroup: () => {
+    const ids = [...multi].filter(id => dev(id).type !== 'group'), groups = S.devices.filter(x => x.type === 'group' && !multi.has(x.id));
+    openForm(`${ids.length} Geräte gruppieren`, [['target', 'Bereich', 'select', [['new', '＋ Neuer Bereich'], ...groups.map(g => [g.id, g.name])]],
+      ['gname', 'Name des neuen Bereichs', 'text', 'z. B. Smarthome-Lampen']], {target: groups.length ? groups[0].id : 'new'},
+      async data => {
+        let gid = +data.target;
+        if (data.target === 'new') { if (!data.gname) throw new Error('Name für den neuen Bereich fehlt'); gid = (await api('POST', '/api/devices', {name: data.gname, type: 'group', icon: 'type-group'})).id; }
+        let fail = 0;
+        for (const id of ids) await api('PUT', '/api/devices/' + id, {parent_id: gid}).catch(() => { fail++; });
+        multi.clear(); selMode = false;
+        if (fail) throw new Error(`${fail} Geräte ließen sich nicht verschieben`);
+      });
+    const f = n => $(`[name=${n}]`, panel), sync = () => { f('gname').closest('label').hidden = f('target').value !== 'new'; };
+    f('target').addEventListener('change', sync); sync();
+  },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
