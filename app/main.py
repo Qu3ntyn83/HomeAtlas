@@ -1,4 +1,5 @@
 """LabVis – interaktive Homelab-Dokumentation: Topologie, Racks, Netzwerke, Scanner, Anbindungen."""
+import hashlib
 import os
 import re
 import threading
@@ -17,6 +18,38 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
+VERSION = "0.7.0"
+
+
+def _build_id():
+    """Kurzer Fingerabdruck des ausgelieferten Codes – ändert sich mit jedem Update und dient als Cache-Schlüssel."""
+    h = hashlib.sha1()
+    for f in sorted(Path(__file__).parent.rglob("*")):
+        if f.is_file() and f.suffix in (".py", ".js", ".css", ".html"):
+            h.update(f.read_bytes())
+    return h.hexdigest()[:8]
+
+
+BUILD = _build_id()
+
+
+class FreshStatic(StaticFiles):
+    """Skripte und Styles immer beim Server gegenprüfen lassen, damit nach einem Update nichts Altes im Browser hängt."""
+    async def get_response(self, path, scope):
+        resp = await super().get_response(path, scope)
+        if path.endswith((".js", ".css", ".html")):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+
+def _page(name):
+    html = (STATIC / name).read_text(encoding="utf-8")
+    for asset in ("/static/style.css", "/static/app.js"):
+        html = html.replace(asset, f"{asset}?v={BUILD}")
+    return Response(html.replace("__VERSION__", f"{VERSION} · Build {BUILD}"), media_type="text/html",
+                    headers={"Cache-Control": "no-store"})
+
+
 TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans")
 MASK = "••••••••"
 SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if len(f) > 3 and f[3] == "password"}
@@ -54,6 +87,8 @@ def _mask(i):
 @app.get("/api/state")
 def state(request: Request):
     return {
+        "version": VERSION,
+        "build": BUILD,
         "user": request.state.user["username"],
         "role": request.state.user["role"],
         "settings": db.settings(),
@@ -371,17 +406,17 @@ def icon(name: str):
 
 @app.get("/login")
 def login_page(request: Request):
-    return auth.login_page(request, STATIC)
+    return auth.login_page(request, _page)
 
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    return {"ok": True, "version": VERSION, "build": BUILD}
 
 
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+    return _page("index.html")
 
 
-app.mount("/static", StaticFiles(directory=STATIC), name="static")
+app.mount("/static", FreshStatic(directory=STATIC), name="static")
