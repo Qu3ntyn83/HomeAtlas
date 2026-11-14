@@ -10,8 +10,10 @@ import ipaddress
 import json
 import re
 import shutil
+import socket
 import ssl
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -24,18 +26,66 @@ KINDS = {
     "docker": {"label": "Docker", "fields": [["url", "API-URL (http://host:2375)"]]},
     "snmp": {"label": "SNMP v2c", "fields": [["host", "Host/IP"], ["community", "Community", "public", "password"]]},
     "opnsense": {"label": "OPNsense (experimentell)", "fields": [
-        ["host", "Host/IP"], ["port", "Port", "443"], ["key", "API-Key"], ["secret", "API-Secret", "", "password"]]},
+        ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche", "443"], ["key", "API-Key"],
+        ["secret", "API-Secret", "", "password"]]},
 }
 PALETTE = ["#58a6ff", "#f0883e", "#bc8cff", "#3fb950", "#e3b341", "#39c5cf", "#f85149", "#ff7b72", "#a5d6ff"]
 _CTX = ssl.create_default_context()
 _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 
+_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_CTX))
 
-def _get(url, headers=None, timeout=10):
+
+def _get(url, headers=None, timeout=15):
     req = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(req, timeout=timeout, context=_CTX) as r:
+    with _OPENER.open(req, timeout=timeout) as r:      # direkt, ohne Proxy aus der Umgebung – Ziele liegen im LAN
         return json.loads(r.read().decode())
+
+
+def reach(host, port, timeout=4):
+    """Prüft vorab, ob der Port überhaupt antwortet – damit die Fehlermeldung sagt, woran es liegt."""
+    try:
+        socket.create_connection((host, int(port)), timeout=timeout).close()
+    except socket.timeout:
+        raise RuntimeError(f"Keine Antwort von {host}:{port}. Stimmen Adresse und Port, und erlaubt die Firewall "
+                           f"den Zugriff vom LabVis-Host auf diesen Port?") from None
+    except ConnectionRefusedError:
+        raise RuntimeError(f"{host}:{port} lehnt die Verbindung ab – dort läuft kein Dienst. "
+                           f"Stimmt der Port?") from None
+    except OSError as e:
+        raise RuntimeError(f"{host}:{port} nicht erreichbar ({e.strerror or e})") from None
+
+
+def explain(e, what="API"):
+    """Macht aus technischen Ausnahmen eine Meldung, mit der man etwas anfangen kann."""
+    if isinstance(e, urllib.error.HTTPError):
+        return {401: f"{what}: Anmeldung abgelehnt (401) – Schlüssel/Token prüfen",
+                403: f"{what}: Zugriff verweigert (403) – dem Benutzer fehlen die Rechte",
+                404: f"{what}: Adresse nicht gefunden (404) – Version der Gegenstelle zu alt oder Pfad anders"
+                }.get(e.code, f"{what}: HTTP-Fehler {e.code}")
+    if isinstance(e, urllib.error.URLError):
+        r = e.reason
+        if isinstance(r, (socket.timeout, TimeoutError)) or "timed out" in str(r):
+            return f"{what}: Zeitüberschreitung – die Gegenstelle antwortet nicht rechtzeitig"
+        if isinstance(r, ssl.SSLError):
+            return f"{what}: TLS-Fehler – spricht der Port wirklich HTTPS? ({r.reason or r})"
+        return f"{what}: {r}"
+    if isinstance(e, (socket.timeout, TimeoutError)):
+        return f"{what}: Zeitüberschreitung – die Gegenstelle antwortet nicht rechtzeitig"
+    if isinstance(e, KeyError):
+        return f"Einstellung fehlt: {e.args[0]}"
+    return str(e)
+
+
+def endpoint(cfg, default_port, scheme="https"):
+    """host darf auch eine ganze URL sein (https://fw.lan:8443) – liefert (schema, host, port)."""
+    raw = (cfg.get("host") or "").strip()
+    if "://" in raw:
+        u = urllib.parse.urlparse(raw)
+        return u.scheme, u.hostname, u.port or cfg.get("port") or (443 if u.scheme == "https" else 80)
+    host, _, p = raw.partition(":")
+    return scheme, host, p or cfg.get("port") or default_port
 
 
 def vlan_for_ip(ip):
@@ -84,7 +134,9 @@ def _prune(integ, prefix, seen):
 # ------------------------------------------------------------------ Proxmox
 def sync_proxmox(integ):
     c = integ["config"]
-    base = f"https://{c['host']}:{c.get('port') or 8006}/api2/json"
+    _, phost, pport = endpoint(c, 8006)
+    reach(phost, pport)
+    base = f"https://{phost}:{pport}/api2/json"
     hdr = {"Authorization": f"PVEAPIToken={c['token_id']}={c['token_secret']}"}
 
     def px(path):
@@ -164,7 +216,9 @@ def icon_from_image(image):
 def sync_docker(integ):
     c = integ["config"]
     url = c["url"].rstrip("/")
-    host = urllib.parse.urlparse(url).hostname
+    pu = urllib.parse.urlparse(url)
+    host = pu.hostname
+    reach(host, pu.port or (443 if pu.scheme == "https" else 80))
     parent = integ.get("device_id")
     if not parent or not db.one("SELECT id FROM devices WHERE id=?", (parent,)):
         d = db.one("SELECT id FROM devices WHERE ip=?", (host,))
@@ -194,7 +248,12 @@ def _walk(host, community, oid):
     r = subprocess.run(["snmpwalk", "-v2c", "-c", community, "-t", "2", "-r", "1", "-OQn", host, oid],
                        capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
-        raise RuntimeError((r.stderr or "SNMP-Fehler").strip()[:200])
+        err = [ln for ln in (r.stderr or "").splitlines() if ln.strip() and not ln.startswith("Created directory")]
+        msg = err[-1].strip() if err else "SNMP-Fehler"
+        if "Timeout" in msg or "No Response" in msg:
+            msg = (f"Keine SNMP-Antwort von {host}. Ist SNMP v2c am Gerät aktiv, stimmt die Community, und darf "
+                   f"der LabVis-Host abfragen (Zugriffsliste am Gerät, UDP 161)?")
+        raise RuntimeError(msg[:300])
     return parse_walk(r.stdout, oid)
 
 
@@ -232,7 +291,7 @@ def build_ifaces(w):
     ifaces = []
     for idx, name in w.get("name", {}).items():
         typ = w.get("type", {}).get(idx, "6")
-        if not (typ == "6" or "ethernet" in typ.lower()):
+        if not (typ in ("6", "117", "62", "69") or "ethernet" in typ.lower()):   # Ethernet, GbE, Fast Ethernet
             continue
         oper = w.get("oper", {}).get(idx, "")
         n = neigh.get(idx) or neigh.get(name2lldp.get(name, "-")) or {}
@@ -250,7 +309,18 @@ def sync_snmp(integ):
     host, com = c["host"], c.get("community") or db.setting("snmp_community")
     oids = {"sys": "1.3.6.1.2.1.1", "name": "1.3.6.1.2.1.31.1.1.1.1", "alias": "1.3.6.1.2.1.31.1.1.1.18",
             "speed": "1.3.6.1.2.1.31.1.1.1.15", "oper": "1.3.6.1.2.1.2.2.1.8", "type": "1.3.6.1.2.1.2.2.1.3"}
-    w = {k: _walk(host, com, o) for k, o in oids.items()}
+    w = {"sys": _walk(host, com, oids["sys"])}
+    for k, o in oids.items():                       # nicht jedes Gerät kennt jede Tabelle (Drucker, PDUs)
+        if k != "sys":
+            try:
+                w[k] = _walk(host, com, o)
+            except RuntimeError:
+                w[k] = {}
+    if not w["name"]:                               # ohne ifXTable: Namen aus ifDescr
+        try:
+            w["name"] = _walk(host, com, "1.3.6.1.2.1.2.2.1.2")
+        except RuntimeError:
+            pass
     for k, o in {"pvid": "1.3.6.1.2.1.17.7.1.4.5.1.1", "lldp_name": "1.0.8802.1.1.2.1.4.1.1.9",
                  "lldp_port": "1.0.8802.1.1.2.1.4.1.1.7", "lldp_loc": "1.0.8802.1.1.2.1.3.7.1.3"}.items():
         try:
@@ -273,7 +343,10 @@ def sync_snmp(integ):
         upd["model"] = descr[:60]
     db.update("devices", dev["id"], upd)
     made = apply_lldp(dev["id"], ifaces)
-    return f"{len(ifaces)} Ports, {sum(1 for i in ifaces if i.get('neighbor'))} LLDP-Nachbarn, {made} neue Kabel"
+    label = sysname or descr[:40] or host
+    if not ifaces:
+        return f"{label} · antwortet, meldet aber keine Netzwerk-Ports"
+    return f"{label} · {len(ifaces)} Ports, {sum(1 for i in ifaces if i.get('neighbor'))} LLDP-Nachbarn, {made} neue Kabel"
 
 
 def apply_lldp(dev_id, ifaces):
@@ -302,8 +375,12 @@ def apply_lldp(dev_id, ifaces):
 # ------------------------------------------------------------------ OPNsense (experimentell)
 def sync_opnsense(integ):
     c = integ["config"]
-    base = f"https://{c['host']}:{c.get('port') or 443}/api"
-    hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['key']}:{c['secret']}".encode()).decode()}
+    scheme, host, port = endpoint(c, 443)
+    if not c.get("key") or not c.get("secret"):
+        raise RuntimeError("API-Key und API-Secret fehlen (OPNsense: System → Zugang → Benutzer → API-Schlüssel)")
+    reach(host, port)
+    base = f"{scheme}://{host}:{port}/api"
+    hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['key'].strip()}:{c['secret'].strip()}".encode()).decode()}
 
     def first(*paths):
         err = None
@@ -311,9 +388,13 @@ def sync_opnsense(integ):
             try:
                 r = _get(base + p, hdr)
                 return r.get("rows", r) if isinstance(r, dict) else r
+            except urllib.error.HTTPError as e:
+                err = e
+                if e.code in (401, 403):            # falsche Zugangsdaten: zweiter Pfad hilft nicht
+                    break
             except Exception as e:  # noqa: BLE001
                 err = e
-        raise err
+        raise RuntimeError(explain(err, "OPNsense"))
 
     vl = first("/interfaces/vlan_settings/search_item", "/interfaces/vlan_settings/searchItem")
     try:
@@ -340,6 +421,8 @@ def sync_opnsense(integ):
             cnt = db.one("SELECT count(*) c FROM vlans")["c"]
             db.insert("vlans", {**data, "color": PALETTE[cnt % len(PALETTE)]})
         n += 1
+    if not n:
+        return "verbunden, aber keine VLANs angelegt (Schnittstellen → Andere Typen → VLAN)"
     return f"{n} VLANs"
 
 
@@ -353,7 +436,7 @@ def sync(integ_id):
     try:
         status = "ok · " + SYNC[integ["kind"]](integ)
     except Exception as e:  # noqa: BLE001 – Status wird in der Oberfläche angezeigt
-        status = "Fehler: " + str(e)[:300]
+        status = "Fehler: " + explain(e, KINDS[integ["kind"]]["label"])[:300]
     db.x("UPDATE integrations SET last_sync=?, last_status=? WHERE id=?", (db.now(), status, integ_id))
     return status
 

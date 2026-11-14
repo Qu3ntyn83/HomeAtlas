@@ -93,6 +93,12 @@ def snmp_get(ip, community, oids, timeout=1):
     return [ln.strip().strip('"') for ln in r.stdout.strip().splitlines()]
 
 
+def clean_name(name):
+    """Platzhalter, die Geräte statt eines Namens melden, sind kein Name."""
+    name = (name or "").strip()
+    return "" if name.lower() in ("(none)", "none", "unknown", "localhost", "localhost.localdomain", "null", "-") else name
+
+
 def _enrich(h, community):
     h["http"] = {}
     for p in h["ports"]:
@@ -102,7 +108,8 @@ def _enrich(h, community):
                 h["http"][str(p)] = r
     v = snmp_get(h["ip"], community, ["1.3.6.1.2.1.1.1.0", "1.3.6.1.2.1.1.5.0"])
     h["snmp"] = {"descr": v[0], "name": v[1] if len(v) > 1 else ""} if v else {}
-    if not h.get("hostname") and h["snmp"].get("name"):
+    h["hostname"] = clean_name(h.get("hostname")) or None
+    if not h.get("hostname") and clean_name(h["snmp"].get("name")):
         h["hostname"] = h["snmp"]["name"]
     h["guess"] = identify(h)
     return h
