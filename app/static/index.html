@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>LabVis</title>
+<link rel="icon" href="/api/icon/type-hypervisor">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header id="top">
+  <h1 id="title">LabVis</h1>
+  <nav id="tabs">
+    <button data-view="topo" class="on">Topologie</button>
+    <button data-view="racks">Racks</button>
+    <button data-view="nets">Netzwerke</button>
+    <button data-view="finds">Funde<span id="badge"></span></button>
+    <button data-view="integ">Anbindungen</button>
+    <button data-view="system">System</button>
+  </nav>
+  <div id="scanstate"></div>
+</header>
+<main id="main"></main>
+<aside id="panel" hidden></aside>
+<div id="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
