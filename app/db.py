@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS devices(
   ip TEXT, mac TEXT, vendor TEXT, hostname TEXT, url TEXT, icon TEXT, note TEXT,
   vlan_id INTEGER, parent_id INTEGER, x REAL, y REAL,
   status TEXT DEFAULT 'unknown', last_seen REAL,
-  rack_id INTEGER, rack_u INTEGER, rack_height INTEGER DEFAULT 1,
+  rack_id INTEGER, rack_u INTEGER, rack_height INTEGER DEFAULT 1, room TEXT,
   source TEXT DEFAULT 'manual', ext_id TEXT, integration_id INTEGER,
   ports TEXT DEFAULT '[]', meta TEXT DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS links(
@@ -51,7 +51,7 @@ LIST_COLS = {"ports", "aps"}
 COLUMNS = {
     "vlans": ["vid", "name", "subnet", "gateway", "color", "note", "scan"],
     "racks": ["name", "units", "location", "note"],
-    "devices": ["name", "type", "model", "os", "ip", "mac", "vendor", "hostname", "url", "icon", "note",
+    "devices": ["name", "type", "model", "os", "ip", "mac", "vendor", "hostname", "url", "icon", "note", "room",
                 "vlan_id", "parent_id", "x", "y", "status", "last_seen", "rack_id", "rack_u", "rack_height",
                 "source", "ext_id", "integration_id", "ports", "meta"],
     "links": ["a_id", "b_id", "a_port", "b_port", "speed", "vlan_id", "trunk", "kind", "note", "source", "wlan_id"],
@@ -76,6 +76,8 @@ def init():
         c.executescript(SCHEMA)
         if 'wlan_id' not in [r[1] for r in c.execute("PRAGMA table_info(links)")]:
             c.execute("ALTER TABLE links ADD COLUMN wlan_id INTEGER")
+        if 'room' not in [r[1] for r in c.execute("PRAGMA table_info(devices)")]:
+            c.execute("ALTER TABLE devices ADD COLUMN room TEXT")
         if 'role' not in [r[1] for r in c.execute("PRAGMA table_info(users)")]:
             c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
         for k, v in DEFAULTS.items():
