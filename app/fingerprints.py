@@ -100,7 +100,8 @@ def identify(h):
     if 8123 in ports and (has("home assistant") or not titles):
         setk(type="server", icon="home-assistant", os="Home Assistant", url=web(8123))
         sug.append(_s("homeassistant", "Home-Assistant-API", "Port 8123 offen",
-                      "Entitäten, Geräte, Integrationen (Long-Lived Token)"))
+                      "Geräte je Integration mit Hersteller, Modell, Raum und Status (langlebiges Token)",
+                      "homeassistant", {"host": f"http://{ip}:8123"}))
     if has("unifi") or (8443 in ports and 8080 in ports and "ubiquiti" not in vendor and has("unifi")):
         setk(type="server", icon="unifi", url=web(8443 if 8443 in ports else 11443))
         sug.append(_s("unifi", "UniFi-Network-API", "UniFi-Controller erkannt",

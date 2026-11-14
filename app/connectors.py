@@ -28,6 +28,8 @@ KINDS = {
     "opnsense": {"label": "OPNsense (experimentell)", "fields": [
         ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche", "443"], ["key", "API-Key"],
         ["secret", "API-Secret", "", "password"]]},
+    "homeassistant": {"label": "Home Assistant", "fields": [
+        ["host", "URL (http://homeassistant:8123)"], ["token", "Langlebiges Zugriffstoken", "", "password"]]},
 }
 PALETTE = ["#58a6ff", "#f0883e", "#bc8cff", "#3fb950", "#e3b341", "#39c5cf", "#f85149", "#ff7b72", "#a5d6ff"]
 _CTX = ssl.create_default_context()
@@ -426,7 +428,153 @@ def sync_opnsense(integ):
     return f"{n} VLANs"
 
 
-SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense}
+# ------------------------------------------------------------------ Home Assistant
+# Ein einziger Aufruf der Template-API liefert die Geräte-Registry als JSON (ohne WebSocket-Verbindung).
+HA_TEMPLATE = (
+    "{% set ns = namespace(out=[]) %}"
+    "{% for did in states | map(attribute='entity_id') | map('device_id') | reject('none') | unique %}"
+    "{% set ents = device_entities(did) %}{% set ce = device_attr(did,'primary_config_entry') %}"
+    "{% set ns.out = ns.out + [{'id': did, 'name': device_attr(did,'name_by_user') or device_attr(did,'name'),"
+    " 'mf': device_attr(did,'manufacturer'), 'model': device_attr(did,'model'), 'sw': device_attr(did,'sw_version'),"
+    " 'area': area_name(did), 'via': device_attr(did,'via_device_id'),"
+    " 'conns': device_attr(did,'connections') | list, 'idents': device_attr(did,'identifiers') | list,"
+    " 'entry': device_attr(did,'entry_type'), 'integ': (config_entry_attr(ce,'domain') if ce else none),"
+    " 'doms': ents | map('regex_replace','\\\\..*','') | unique | list, 'n': ents | count,"
+    " 'un': ents | select('is_state','unavailable') | list | count}] %}"
+    "{% endfor %}{{ ns.out | tojson }}")
+HA_TYPES = [("vacuum", "vacuum"), ("camera", "camera"), ("light", "light"), ("climate", "thermostat"), ("cover", "blind"),
+            ("lock", "lock"), ("media_player", "speaker"), ("switch", "plug"), ("binary_sensor", "sensor"), ("sensor", "sensor")]
+HA_ICONS = {"hue": "philips-hue", "tplink": "tp-link", "smartthings": "smartthings", "roborock": "roborock", "tuya": "tuya",
+            "alexa_media": "amazon-alexa", "matter": "matter", "zha": "zigbee", "mqtt": "mqtt", "esphome": "esphome",
+            "shelly": "shelly", "ring": "ring", "bambu_lab": "bambu-lab", "samsungtv": "samsung", "unifi": "unifi"}
+
+
+def ha_type(d):
+    doms = set(d.get("doms") or [])
+    if "media_player" in doms and "tv" in ((d.get("model") or "") + " " + (d.get("name") or "")).lower():
+        return "tv"
+    return next((t for dom, t in HA_TYPES if dom in doms), None)
+
+
+def ha_plan(devs, chosen):
+    """Trennt, was übernommen wird: gewählte Integrationen, keine Dienste; reine Tracker reichern nur an."""
+    out = []
+    for d in devs:
+        if d.get("entry") == "service" or d["integ"] not in chosen:
+            continue
+        d["mac"] = next((v.upper().replace("-", ":") for t, v in (d.get("conns") or []) if t == "mac"), None)
+        d["tracker"] = set(d.get("doms") or []) <= {"device_tracker"}
+        out.append(d)
+    return out
+
+
+def sync_homeassistant(integ):
+    from . import scanner
+    c = integ["config"]
+    scheme, host, port = endpoint(c, 8123, "http")
+    if not c.get("token"):
+        raise RuntimeError("Zugriffstoken fehlt (Home Assistant: Profil → Sicherheit → Langlebige Zugriffstoken)")
+    reach(host, port)
+    req = urllib.request.Request(f"{scheme}://{host}:{port}/api/template", method="POST",
+                                 data=json.dumps({"template": HA_TEMPLATE}).encode(),
+                                 headers={"Authorization": "Bearer " + c["token"].strip(), "Content-Type": "application/json"})
+    with _OPENER.open(req, timeout=90) as r:
+        devs = json.loads(r.read().decode())
+    for d in devs:
+        d["integ"] = d.get("integ") or (d["idents"][0][0] if d.get("idents") else "unbekannt")
+    real = [d for d in devs if d.get("entry") != "service"]
+    avail = {}
+    for d in real:
+        avail[d["integ"]] = avail.get(d["integ"], 0) + 1
+    c["_available"] = dict(sorted(avail.items()))
+    db.update("integrations", integ["id"], {"config": c})
+    chosen = set(c.get("integrations") or [])
+    if not chosen:
+        return (f"{len(real)} Geräte in {len(avail)} Integrationen gefunden – unter „Bearbeiten“ auswählen, "
+                f"welche Integrationen übernommen werden")
+    plan = ha_plan(devs, chosen)
+    _, by_mac = scanner._index()
+    ids, seen, new, upd, linked = {}, set(), 0, 0, 0
+    for d in plan:
+        ext = "ha/" + d["id"]
+        name = (d.get("name") or d.get("model") or "Gerät").strip()
+        own = db.one("SELECT * FROM devices WHERE integration_id=? AND ext_id=?", (integ["id"], ext))
+        hit = None if own else (by_mac.get(d["mac"]) if d["mac"] else None)
+        up = d["n"] == 0 or d["un"] < d["n"]
+        ha_meta = {"ha": {"integration": d["integ"], "sw": d.get("sw"), "id": d["id"]}}
+        if hit:                                   # vorhandenes (gescanntes) Gerät: nur anreichern
+            dev = db.one("SELECT * FROM devices WHERE id=?", (hit[0],))
+            auto = dev["name"] in (dev.get("ip"), (dev.get("hostname") or "").split(".")[0], dev.get("mac"))
+            patch = {"meta": {**(dev["meta"] or {}), **ha_meta}}
+            if auto and name:
+                patch["name"] = name
+            if not dev.get("room") and d.get("area"):
+                patch["room"] = d["area"]
+            if not dev.get("vendor") and d.get("mf"):
+                patch["vendor"] = d["mf"]
+            if not dev.get("model") and d.get("model"):
+                patch["model"] = d["model"]
+            if dev["type"] in ("other", "iot", "client") and ha_type(d):
+                patch["type"] = ha_type(d)
+            db.update("devices", dev["id"], patch)
+            ids[d["id"]] = dev["id"]
+            linked += 1
+            continue
+        if d["tracker"]:                          # reine Anwesenheits-Tracker werden nie als Gerät angelegt
+            continue
+        seen.add(ext)
+        if own:
+            patch = {"name": name, "status": "online" if up else "offline", "vendor": d.get("mf"), "model": d.get("model"),
+                     "meta": {**(own["meta"] or {}), **ha_meta}}
+            if up:
+                patch["last_seen"] = db.now()
+            if not own.get("room") and d.get("area"):
+                patch["room"] = d["area"]
+            if own["type"] in ("other", "iot") and ha_type(d):
+                patch["type"] = ha_type(d)
+            db.update("devices", own["id"], {k: v for k, v in patch.items() if v is not None})
+            ids[d["id"]] = own["id"]
+            upd += 1
+        else:
+            ids[d["id"]] = db.insert("devices", {
+                "name": name, "type": ha_type(d) or "iot", "vendor": d.get("mf"), "model": d.get("model"), "mac": d["mac"],
+                "room": d.get("area"), "status": "online" if up else "offline", "last_seen": db.now() if up else None,
+                "source": "homeassistant", "integration_id": integ["id"], "ext_id": ext, "meta": ha_meta})
+            new += 1
+    # Platzierung (nur einmal, danach bleibt die Zuordnung Sache des Nutzers): an die Bridge, sonst in einen Bereich je Integration
+    groups, bridges = {}, {x.get("via") for x in plan if x.get("via")}
+    loose = {}                                   # Geräte ohne Bridge je Integration: erst ab drei lohnt ein Bereich
+    for d in plan:
+        if not d.get("via") and d["id"] not in bridges and not d["tracker"]:
+            loose[d["integ"]] = loose.get(d["integ"], 0) + 1
+    for d in plan:
+        me = db.one("SELECT * FROM devices WHERE id=?", (ids.get(d["id"]) or 0,))
+        if not me or me["source"] != "homeassistant" or (me["meta"] or {}).get("ha_placed"):
+            continue
+        parent = ids.get(d.get("via")) if d.get("via") else None
+        if parent == me["id"]:
+            parent = None
+        is_bridge = d["id"] in bridges
+        if not parent and not is_bridge and not me.get("parent_id") and loose.get(d["integ"], 0) >= 3:
+            if d["integ"] not in groups:
+                g = db.one("SELECT id FROM devices WHERE integration_id=? AND ext_id=?", (integ["id"], "ha-group/" + d["integ"]))
+                groups[d["integ"]] = g["id"] if g else db.insert("devices", {
+                    "name": "Home Assistant · " + d["integ"], "type": "group", "icon": HA_ICONS.get(d["integ"], "home-assistant"),
+                    "source": "homeassistant", "integration_id": integ["id"], "ext_id": "ha-group/" + d["integ"]})
+            parent = groups[d["integ"]]
+        patch = {"meta": {**(me["meta"] or {}), "ha_placed": True}}
+        if parent and not me.get("parent_id"):
+            patch["parent_id"] = parent
+        if is_bridge:
+            patch["type"] = "iot" if me["type"] in ("sensor", "plug", "other") else None
+            patch["icon"] = None if me.get("icon") else HA_ICONS.get(d["integ"])
+        db.update("devices", me["id"], {k: v for k, v in patch.items() if v is not None})
+    _prune(integ, "ha/", seen)
+    return f"{new} neu, {upd} aktualisiert, {linked} mit vorhandenen Geräten verknüpft ({', '.join(sorted(chosen))})"
+
+
+SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense,
+        "homeassistant": sync_homeassistant}
 
 
 def sync(integ_id):

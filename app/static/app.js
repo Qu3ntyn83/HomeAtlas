@@ -627,7 +627,7 @@ function openForm(title, fields, val, onSave, extra, keepSel) {
   $('form', panel).addEventListener('submit', e => {
     e.preventDefault();
     const data = {};
-    for (const el of e.target.elements) if (el.name) data[el.name] = el.multiple ? [...el.selectedOptions].map(o => +o.value) : el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
+    for (const el of e.target.elements) if (el.name) data[el.name] = el.multiple ? [...el.selectedOptions].map(o => (o.value !== '' && !isNaN(+o.value) ? +o.value : o.value)) : el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
     run(async () => { await onSave(data); if (sel) panelMode = 'device'; else closePanel(); }, 'Gespeichert');
   });
 }
@@ -933,6 +933,11 @@ function integForm(i) {
     ['name', 'Bezeichnung'], ...k.fields.map(([key, label, ph, type]) => ['c_' + key, label, type || 'text', ph]),
     ['device_id', 'Gehört zu Gerät', 'select', devOpts()], ['enabled', 'Automatisch synchronisieren', 'check']];
   const val = {name: i.name, device_id: i.device_id, enabled: i.enabled ?? 1, pick: i.device_id ? 'd:' + i.device_id : ''};
+  const avail = (i.config || {})._available;   // Home Assistant: nach dem ersten Abruf die Integrationen zur Auswahl
+  if (avail) {
+    fields.splice(fields.length - 2, 0, ['c_integrations', 'Integrationen übernehmen (Mehrfachauswahl)', 'multi', Object.entries(avail).map(([n, cnt]) => [n, `${n} (${cnt})`])]);
+    val.c_integrations = (i.config || {}).integrations || [];
+  }
   for (const [key, , ph] of k.fields) val['c_' + key] = (i.config || {})[key] ?? ph ?? '';
   openForm((isNew ? 'Neu: ' : '') + esc(k.label), fields, val, async data => {
     const body = {kind: i.kind, name: data.name, device_id: data.device_id, enabled: data.enabled, config: {}};
@@ -946,7 +951,7 @@ function integForm(i) {
   if (pick) pick.addEventListener('change', () => {
     const c = cands.find(x => x.v === pick.value), f = n => $(`[name=${n}]`, panel);
     if (!c) return;
-    if (f('c_host')) f('c_host').value = c.ip;
+    if (f('c_host')) f('c_host').value = i.kind === 'homeassistant' ? `http://${c.ip}:8123` : c.ip;
     if (f('c_url')) f('c_url').value = `http://${c.ip}:2375`;
     if (!f('name').value || f('name').dataset.auto) { f('name').value = c.name; f('name').dataset.auto = '1'; }
     f('device_id').value = c.v.startsWith('d:') ? c.v.slice(2) : '';

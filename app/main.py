@@ -18,7 +18,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 
 def _build_id():
@@ -137,6 +137,7 @@ def change(table: str, rid: int, data: dict = Body(...)):
     if table == "integrations" and "config" in data:
         old = (db.one("SELECT config FROM integrations WHERE id=?", (rid,)) or {}).get("config", {})
         data["config"] = {k: (old.get(k) if v == MASK else v) for k, v in data["config"].items()}
+        data["config"].update({k: v for k, v in old.items() if k.startswith("_") and k not in data["config"]})
     if table == "devices" and data.get("parent_id"):
         cur, hops = data["parent_id"], 0
         while cur and hops < 20:
