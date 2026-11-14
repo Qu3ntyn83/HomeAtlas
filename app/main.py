@@ -18,7 +18,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.7.1"
+VERSION = "0.7.2"
 
 
 def _build_id():

@@ -202,3 +202,13 @@ table.t input[type=checkbox]{width:16px;height:16px;accent-color:var(--link);cur
 .rdev.bl{background:repeating-linear-gradient(135deg,#10161e 0 8px,#151c26 8px 16px);border-style:dashed}
 .rdev.cm{background:#10161e;border-style:dashed}
 .rdev.cm b::before{content:"≡ ";color:var(--faint)}
+
+/* ---------- Icon-Hilfe */
+.iconhelp{font-size:12.5px;color:var(--muted);margin-top:-4px}
+.ihrow{display:flex;gap:10px;align-items:center}
+.ihrow img{flex:none;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:3px}
+.iconhelp details{margin-top:6px}
+.iconhelp summary{cursor:pointer;color:var(--link)}
+.ihgrid{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.ihgrid button{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px;cursor:pointer;line-height:0}
+.ihgrid button:hover{border-color:var(--muted)}
