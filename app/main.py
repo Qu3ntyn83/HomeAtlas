@@ -18,7 +18,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 
 
 def _build_id():
@@ -119,6 +119,11 @@ def create(table: str, data: dict = Body(...)):
     if table not in TABLES:
         raise HTTPException(404)
     data = _clean(table, data)
+    if table == "integrations":
+        key = lambda c: ((c.get("host") or c.get("url") or "").strip().lower(), str(c.get("port") or ""))   # noqa: E731
+        if key(data.get("config") or {})[0] and any(i["kind"] == data.get("kind") and key(i["config"] or {}) == key(data["config"])
+                                                 for i in db.q("SELECT kind, config FROM integrations")):
+            raise HTTPException(400, "Für diese Adresse gibt es schon eine Anbindung dieser Art")
     if table == "links" and data.get("a_id") == data.get("b_id"):
         raise HTTPException(400, "Ein Gerät kann nicht mit sich selbst verbunden werden")
     return {"id": db.insert(table, data)}
@@ -198,7 +203,7 @@ def scan(vid: int):
 
 def _approve(d):
     g = d["guess"] or {}
-    name = (d.get("hostname") or "").split(".")[0] or d["ip"]
+    name = scanner.clean_name(d.get("hostname")).split(".")[0] or d["ip"]
     return db.insert("devices", {
         "name": name, "type": g.get("type") or "other", "icon": g.get("icon"), "os": g.get("os"),
         "model": g.get("model"), "url": g.get("url"), "ip": d["ip"], "mac": d.get("mac"), "vendor": d.get("vendor"),
