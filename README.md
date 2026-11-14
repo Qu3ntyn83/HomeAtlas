@@ -77,7 +77,19 @@ Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Onlin
 
 Eine Verbindung zwischen zwei Geräten ist entweder ein **Kabel** (Breite = Geschwindigkeit, Trunk hell mit dunklem Kern), eine
 **API-Verbindung** (gestrichelt, mit Pfeil vom abfragenden zum abgefragten System und Protokoll als Beschriftung, z. B. „API · REST :8006")
-oder **logisch** (gepunktet, etwa VPN oder Cloud). Im Gerät legt „API-Verbindung" direkt eine solche an.
+**WLAN** (gepunktet in VLAN-Farbe) oder **logisch** (fein gepunktet, grau, etwa VPN oder Cloud). Im Gerät legt „API-Verbindung" direkt eine solche an.
+
+## WLAN
+
+Unter *Netzwerke → WLAN* legst du SSIDs an: Name, Netzwerk/VLAN, Band, Verschlüsselung und die Access Points, die sie ausstrahlen.
+Die SSIDs erscheinen als Pillen auf den AP-Karten. Funkverbindungen zeichnest du als Verbindung der Art **WLAN** (gepunktet, in der
+Farbe des zugehörigen VLANs, beschriftet mit der SSID). SSIDs und WLAN-Clients werden von Hand gepflegt; einen UniFi-Abgleich gibt es noch nicht.
+
+## Mehrere Geräte auf einmal ändern
+
+In der Topologie „Auswählen" antippen (oder Strg/Umschalt + Klick) und Karten oder Chips markieren; in der Adress-Tabelle gibt es
+dafür Kontrollkästchen. Die Leiste am unteren Rand ändert dann Typ, Netzwerk, Host, Modell, System, Icon oder Notiz für alle
+markierten Geräte, führt sie zusammen oder löscht sie.
 
 ## Geräte mit mehreren Netzwerkkarten
 

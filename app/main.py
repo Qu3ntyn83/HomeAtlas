@@ -17,7 +17,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-TABLES = ("vlans", "racks", "devices", "links", "integrations")
+TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans")
 MASK = "••••••••"
 SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if len(f) > 3 and f[3] == "password"}
 
@@ -61,6 +61,7 @@ def state(request: Request):
         "racks": db.q("SELECT * FROM racks ORDER BY id"),
         "devices": db.q("SELECT * FROM devices ORDER BY id"),
         "links": db.q("SELECT * FROM links ORDER BY id"),
+        "wlans": db.q("SELECT * FROM wlans ORDER BY ssid COLLATE NOCASE"),
         "discoveries": db.q("SELECT * FROM discoveries ORDER BY state='ignored', last_seen DESC"),
         "integrations": [_mask(i) for i in db.q("SELECT * FROM integrations ORDER BY id")],
         "scans": db.q("SELECT * FROM scans ORDER BY id DESC LIMIT 15"),
@@ -72,7 +73,7 @@ def state(request: Request):
 
 def _clean(table, data):
     data = {k: (None if v == "" else v) for k, v in data.items() if k in db.COLUMNS[table]}
-    for k in ("vid", "units", "vlan_id", "parent_id", "rack_id", "rack_u", "rack_height", "a_id", "b_id", "device_id"):
+    for k in ("vid", "units", "vlan_id", "parent_id", "rack_id", "rack_u", "rack_height", "a_id", "b_id", "device_id", "wlan_id"):
         if data.get(k) is not None:
             data[k] = int(data[k])
     return data
@@ -117,8 +118,12 @@ def remove(table: str, rid: int):
     elif table == "vlans":
         db.x("UPDATE devices SET vlan_id=NULL WHERE vlan_id=?", (rid,))
         db.x("UPDATE links SET vlan_id=NULL WHERE vlan_id=?", (rid,))
+        db.x("UPDATE wlans SET vlan_id=NULL WHERE vlan_id=?", (rid,))
         db.x("DELETE FROM discoveries WHERE vlan_id=?", (rid,))
         db.x("DELETE FROM vlans WHERE id=?", (rid,))
+    elif table == "wlans":
+        db.x("UPDATE links SET wlan_id=NULL WHERE wlan_id=?", (rid,))
+        db.x("DELETE FROM wlans WHERE id=?", (rid,))
     elif table == "racks":
         db.x("UPDATE devices SET rack_id=NULL, rack_u=NULL WHERE rack_id=?", (rid,))
         db.x("DELETE FROM racks WHERE id=?", (rid,))
@@ -327,12 +332,12 @@ def export():
 
 @app.post("/api/restore/all")
 def restore(data: dict = Body(...)):
-    if not all(t in data for t in TABLES):
+    if not all(t in data for t in TABLES if t != "wlans"):   # ältere Exporte kennen noch keine WLANs
         raise HTTPException(400, "Kein LabVis-Export")
     with db.conn() as c:
         for t in TABLES:
             c.execute(f"DELETE FROM {t}")
-            for row in data[t]:
+            for row in data.get(t, []):
                 cols = [k for k in row if k == "id" or k in db.COLUMNS[t]]
                 c.execute(f"INSERT INTO {t}({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                           [db._enc(row[k]) for k in cols])

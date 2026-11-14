@@ -62,9 +62,14 @@ def import_inventory(text):
         ifaces = [{"idx": n + 1, "name": p["name"], "up": p.get("to") not in (None, "free"), "speed": "10G" if "sfp" in p["name"] else "1G",
                    "pvid": p.get("untagged"), "tagged": p.get("tagged", []), "neighbor": p.get("to")} for n, p in enumerate(sw["ports"])]
         swid = dev(sw, "switch", "99", icon="mikrotik", meta={"ifaces": ifaces})
+    aps = []
     for d in inv.get("devices", {}).values():
-        dev(d, {"workstation": "workstation", "access point": "ap", "coordinator": "iot"}.get(d.get("type"), "other"),
-            d.get("vlan"))
+        typ = {"workstation": "workstation", "access point": "ap", "coordinator": "iot"}.get(d.get("type"), "other")
+        i = dev(d, typ, d.get("vlan"))
+        if typ == "ap":
+            aps.append(i)
+    for w in inv.get("ssids", []):
+        db.insert("wlans", {"ssid": w["name"], "vlan_id": vl.get(str(w.get("vlan"))), "aps": aps})
     t = inv.get("terra")
     if t:
         tid = dev(t, "hypervisor", "10", icon="proxmox")

@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS scans(
   id INTEGER PRIMARY KEY, network TEXT, started REAL, finished REAL, hosts INTEGER DEFAULT 0,
   new INTEGER DEFAULT 0, status TEXT, log TEXT);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS wlans(
+  id INTEGER PRIMARY KEY, ssid TEXT NOT NULL, vlan_id INTEGER, band TEXT, security TEXT, note TEXT, aps TEXT DEFAULT '[]');
 CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, pw TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'admin', created REAL, last_login REAL);
@@ -44,14 +46,16 @@ CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created REAL, expires REAL, ua TEXT);
 """
 
-JSON_COLS = {"ports", "meta", "http", "snmp", "guess", "config"}
+JSON_COLS = {"ports", "meta", "http", "snmp", "guess", "config", "aps"}
+LIST_COLS = {"ports", "aps"}
 COLUMNS = {
     "vlans": ["vid", "name", "subnet", "gateway", "color", "note", "scan"],
     "racks": ["name", "units", "location", "note"],
     "devices": ["name", "type", "model", "os", "ip", "mac", "vendor", "hostname", "url", "icon", "note",
                 "vlan_id", "parent_id", "x", "y", "status", "last_seen", "rack_id", "rack_u", "rack_height",
                 "source", "ext_id", "integration_id", "ports", "meta"],
-    "links": ["a_id", "b_id", "a_port", "b_port", "speed", "vlan_id", "trunk", "kind", "note", "source"],
+    "links": ["a_id", "b_id", "a_port", "b_port", "speed", "vlan_id", "trunk", "kind", "note", "source", "wlan_id"],
+    "wlans": ["ssid", "vlan_id", "band", "security", "note", "aps"],
     "integrations": ["kind", "name", "device_id", "config", "enabled"],
 }
 DEFAULTS = {"scan_interval_min": "60", "sync_interval_min": "15", "snmp_community": "public",
@@ -70,6 +74,8 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        if 'wlan_id' not in [r[1] for r in c.execute("PRAGMA table_info(links)")]:
+            c.execute("ALTER TABLE links ADD COLUMN wlan_id INTEGER")
         if 'role' not in [r[1] for r in c.execute("PRAGMA table_info(users)")]:
             c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
         for k, v in DEFAULTS.items():
@@ -80,9 +86,9 @@ def _dec(row):
     d = dict(row)
     for k in JSON_COLS & d.keys():
         try:
-            d[k] = json.loads(d[k]) if d[k] else ({} if k != "ports" else [])
+            d[k] = json.loads(d[k]) if d[k] else ([] if k in LIST_COLS else {})
         except (TypeError, ValueError):
-            d[k] = {}
+            d[k] = [] if k in LIST_COLS else {}
     return d
 
 
@@ -133,6 +139,9 @@ def delete_device(did):
         delete_device(ch["id"])
     x("DELETE FROM links WHERE a_id=? OR b_id=?", (did, did))
     x("UPDATE integrations SET device_id=NULL WHERE device_id=?", (did,))
+    for w in q("SELECT id, aps FROM wlans"):
+        if did in (w["aps"] or []):
+            update("wlans", w["id"], {"aps": [a for a in w["aps"] if a != did]})
     x("DELETE FROM devices WHERE id=?", (did,))
 
 
