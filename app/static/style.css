@@ -68,6 +68,7 @@ a{color:var(--link);text-decoration:none}
   padding:10px 12px;font-size:11.5px;color:var(--muted);display:grid;grid-template-columns:auto auto;gap:4px 10px;align-items:center}
 #legend i{display:block;width:44px;background:var(--link);border-radius:9px}
 #legend i.tr{height:7px;background:#d5dde6;box-shadow:inset 0 0 0 2.2px #d5dde6,inset 0 0 0 9px var(--bg)}
+#legend i.ap{height:0;border-top:2px dashed #d2a8ff;background:none}
 #legend i.lg{height:0;border-top:2px dotted var(--muted);background:none}
 
 /* ---------- Panel */
