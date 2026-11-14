@@ -60,6 +60,7 @@ async function load(silent) {
     S = await api('GET', '/api/state');
   } catch (e) { if (!silent) toast(e.message, true); return; }
   $('#title').textContent = S.settings.title || 'LabVis';
+  document.body.classList.toggle('ro', S.role === 'read');
   document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
   $('#badge').textContent = S.discoveries.filter(d => d.state === 'pending').length || '';
   $('#scanstate').textContent = S.scanner.running ? `Scan ${S.scanner.running} · ${S.scanner.phase}` : '';
@@ -279,7 +280,7 @@ function autoLayout(all) {
     }
   }
   for (const m of moved) { const d = dev(m.id); d.x = m.x; d.y = m.y; }
-  if (moved.length) api('POST', '/api/positions/save', moved).catch(e => toast(e.message, true));
+  if (moved.length && !ro()) api('POST', '/api/positions/save', moved).catch(e => toast(e.message, true));
 }
 function fitView() {
   const cs = [...cards.values()];
@@ -381,7 +382,7 @@ function bindCanvas() {
     busy = false;
     if (mode === 'card' && moved) {
       const d = dev(card.id); d.x = card.x; d.y = card.y;
-      api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
+      if (!ro()) api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
     } else if (!moved) {
       const t = start.target, chip = t.closest('.chip'), cn = t.closest('.card'), ln = t.closest('.link');
       if (chip) showDevice(+chip.dataset.id); else if (cn) showDevice(+cn.dataset.id);
@@ -469,6 +470,7 @@ function formHtml(title, fields, val, extra = '') {
     `<div class="acts"><button class="btn pri" type="submit">Speichern</button><button class="btn" type="button" data-act="cancel">Abbrechen</button>${extra}</div></form>`;
 }
 function openForm(title, fields, val, onSave, extra, keepSel) {
+  if (ro()) return;
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
   $('form', panel).addEventListener('submit', e => {
@@ -539,7 +541,7 @@ function bindRack(body) {
   const units = +body.dataset.units, rid = +body.dataset.rack;
   const occupied = (u, hh, skip) => S.devices.some(d => d.rack_id === rid && d.id !== skip && d.rack_u && u < d.rack_u + (d.rack_height || 1) && d.rack_u < u + hh);
   body.addEventListener('click', e => {
-    if (e.target.closest('.rdev')) return;
+    if (ro() || e.target.closest('.rdev')) return;
     const u = units - Math.floor((e.clientY - body.getBoundingClientRect().top) / UH);
     if (u < 1 || u > units || occupied(u, 1)) return;
     const free = S.devices.filter(d => !d.parent_id && !d.rack_id);
@@ -556,7 +558,7 @@ function bindRack(body) {
     el.addEventListener('pointerdown', e => { sy = e.clientY; top0 = parseFloat(el.style.top); moved = false; el.setPointerCapture(e.pointerId); });
     el.addEventListener('pointermove', e => {
       if (sy == null) return;
-      if (!moved && Math.abs(e.clientY - sy) < 5) return;
+      if (ro() || (!moved && Math.abs(e.clientY - sy) < 5)) return;
       moved = true; busy = true; el.classList.add('drag'); el.style.top = (top0 + e.clientY - sy) + 'px';
     });
     el.addEventListener('pointerup', () => {
@@ -677,48 +679,57 @@ function integForm(i) {
 }
 
 // ------------------------------------------------------------ System
+const ROLE = {read: 'Lesen', write: 'Ändern', admin: 'Admin'};
+const roleOpts = cur => Object.entries(ROLE).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${v}</option>`).join('');
 function renderSystem() {
-  const s = S.settings;
-  main.innerHTML = `<div class="page" style="max-width:760px"><div class="bar"><h2>System</h2></div><div class="box"><form class="f" id="setf">` +
+  const s = S.settings, admin = S.role === 'admin';
+  const vals = f => { const d = {}; for (const el of f.elements) if (el.name) d[el.name] = el.value; return d; };
+  let h = `<div class="page" style="max-width:760px"><div class="bar"><h2>System</h2></div>` +
+    `<h3 class="faint" style="margin-top:0">Konto</h3><div class="box"><div class="rowl" style="border:0;padding:0 0 10px">Angemeldet als <b>${esc(S.user)}</b>` +
+    `<span class="pill">${ROLE[S.role]}</span><button class="btn sm" style="margin-left:auto" data-act="logout">Abmelden</button></div><form class="f" id="pwf"><div class="two">` +
+    `<label>Aktuelles Passwort<input name="current" type="password" autocomplete="current-password" required></label>` +
+    `<label>Neues Passwort<input name="new" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
+    `<div class="acts" style="margin:0"><button class="btn">Passwort ändern</button></div></form></div>`;
+  if (admin) h += `<h3 class="faint" style="margin-top:24px">Benutzerverwaltung</h3><div class="box"><div id="users" class="muted">lädt …</div>` +
+    `<p class="muted" style="font-size:12.5px;margin:10px 0"><b>Lesen</b>: alles ansehen · <b>Ändern</b>: dokumentieren, scannen, Anbindungen pflegen · ` +
+    `<b>Admin</b>: zusätzlich Benutzer, Einstellungen, Export</p><form class="f" id="uf"><div class="two">` +
+    `<label>Neuer Benutzername<input name="username" autocomplete="off" autocapitalize="none" required></label>` +
+    `<label>Recht<select name="role">${roleOpts('read')}</select></label></div>` +
+    `<label>Passwort (mind. 10 Zeichen)<input name="password" type="password" autocomplete="new-password" minlength="10" required></label>` +
+    `<div class="acts" style="margin:0"><button class="btn pri">Benutzer anlegen</button></div></form></div>` +
+    `<h3 class="faint" style="margin-top:24px">Einstellungen</h3><div class="box"><form class="f" id="setf">` +
     `<label>Titel<input name="title" value="${esc(s.title)}"></label><div class="two"><label>Scan-Intervall (Minuten)<input name="scan_interval_min" type="number" min="5" value="${esc(s.scan_interval_min)}"></label>` +
     `<label>Sync-Intervall der Anbindungen (Minuten)<input name="sync_interval_min" type="number" min="1" value="${esc(s.sync_interval_min)}"></label></div>` +
     `<label>SNMP-Community für den Scan<input name="snmp_community" value="${esc(s.snmp_community)}"></label>` +
-    `<div class="acts"><button class="btn pri">Speichern</button></div></form></div>` +
-    `<h3 class="faint" style="margin-top:24px">Konto</h3><div class="box"><div class="rowl" style="border:0;padding:0 0 10px">Angemeldet als <b>${esc(S.user)}</b>` +
-    `<button class="btn sm" style="margin-left:auto" data-act="logout">Abmelden</button></div><form class="f" id="pwf"><div class="two">` +
-    `<label>Aktuelles Passwort<input name="current" type="password" autocomplete="current-password" required></label>` +
-    `<label>Neues Passwort<input name="new" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
-    `<div class="acts" style="margin:0"><button class="btn">Passwort ändern</button></div></form></div>` +
-    `<h3 class="faint" style="margin-top:24px">Benutzer</h3><div class="box"><div id="users" class="muted">lädt …</div><form class="f" id="uf" style="margin-top:12px"><div class="two">` +
-    `<label>Neuer Benutzername<input name="username" autocomplete="off" autocapitalize="none" required></label>` +
-    `<label>Passwort (mind. 10 Zeichen)<input name="password" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
-    `<div class="acts" style="margin:0"><button class="btn">Benutzer anlegen</button></div></form></div>` +
+    `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button></div></form></div>` +
     `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><div class="acts" style="margin:0"><a class="btn" href="/api/export" download>Export (JSON)</a>` +
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
-    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>` +
-    `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks</p></div>`;
-  const vals = f => { const d = {}; for (const el of f.elements) if (el.name) d[el.name] = el.value; return d; };
+    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>`;
+  else if (S.role === 'write') h += `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>`;
+  main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks</p></div>`;
   $('#pwf').addEventListener('submit', async e => {
     e.preventDefault();
     try { await api('POST', '/api/auth/password', vals(e.target)); e.target.reset(); toast('Passwort geändert – andere Sitzungen wurden abgemeldet'); }
     catch (x) { toast(x.message, true); }
   });
+  if (!admin) return;
   $('#uf').addEventListener('submit', async e => {
     e.preventDefault();
     try { await api('POST', '/api/auth/users', vals(e.target)); toast('Benutzer angelegt'); renderSystem(); } catch (x) { toast(x.message, true); }
   });
+  $('#setf').addEventListener('submit', e => { e.preventDefault(); run(() => api('POST', '/api/settings/save', vals(e.target)), 'Gespeichert'); });
   api('GET', '/api/auth/users').then(r => {
     const box = $('#users'); if (!box) return;
     box.className = '';
-    box.innerHTML = r.users.map(u => `<div class="rowl"><b>${esc(u.username)}</b><span class="muted">letzte Anmeldung: ${ago(u.last_login)}</span>` +
-      (u.id === r.me ? '<span class="pill" style="margin-left:auto">du</span>' :
-        `<button class="btn sm bad" style="margin-left:auto" data-act="delUser" data-id="${u.id}" data-name="${esc(u.username)}">Löschen</button>`) + '</div>').join('');
+    box.innerHTML = r.users.map(u => `<div class="rowl" style="flex-wrap:wrap"><b>${esc(u.username)}</b><span class="muted" style="font-size:12px">zuletzt: ${ago(u.last_login)}</span>` +
+      `<span style="margin-left:auto;display:flex;gap:6px;align-items:center">` + (u.id === r.me ? `<span class="pill">${ROLE[u.role]} · du</span>` :
+        `<select class="inp usel" data-id="${u.id}" style="width:auto;padding:3px 6px;font-size:12.5px" aria-label="Recht von ${esc(u.username)}">${roleOpts(u.role)}</select>` +
+        `<button class="btn sm" data-act="pwUser" data-id="${u.id}" data-name="${esc(u.username)}">Passwort</button>` +
+        `<button class="btn sm bad" data-act="delUser" data-id="${u.id}" data-name="${esc(u.username)}">Löschen</button>`) + '</span></div>').join('');
+    box.querySelectorAll('.usel').forEach(sel2 => sel2.addEventListener('change', async () => {
+      try { await api('PUT', '/api/auth/users/' + sel2.dataset.id, {role: sel2.value}); toast('Recht geändert'); } catch (x) { toast(x.message, true); renderSystem(); }
+    }));
   }).catch(() => {});
-  $('#setf').addEventListener('submit', e => {
-    e.preventDefault();
-    const data = {}; for (const el of e.target.elements) if (el.name) data[el.name] = el.value;
-    run(() => api('POST', '/api/settings/save', data), 'Gespeichert');
-  });
 }
 
 // ------------------------------------------------------------ Aktionen
@@ -756,6 +767,11 @@ const ACT = {
   delInteg: d => { if (confirm('Anbindung löschen? Bereits ausgelesene Geräte bleiben erhalten.')) run(() => api('DELETE', '/api/integrations/' + d.id)); },
   sync: d => run(async () => { toast('Synchronisiere …'); const r = await api('POST', `/api/integrations/${d.id}/sync`); toast(r.status, r.status.startsWith('Fehler')); }),
   logout: async () => { await fetch('/api/auth/logout', {method: 'POST'}); location.href = '/login'; },
+  pwUser: async d => {
+    const pw = prompt(`Neues Passwort für „${d.name}“ (mindestens 10 Zeichen). Das Konto wird überall abgemeldet.`);
+    if (!pw) return;
+    try { await api('PUT', '/api/auth/users/' + d.id, {password: pw}); toast('Passwort gesetzt'); } catch (x) { toast(x.message, true); }
+  },
   delUser: async d => {
     if (!confirm(`Benutzer „${d.name}“ löschen?`)) return;
     try { await api('DELETE', '/api/auth/users/' + d.id); renderSystem(); } catch (x) { toast(x.message, true); }
@@ -765,7 +781,7 @@ const ACT = {
     f.onchange = async () => {
       const text = await f.files[0].text();
       if (d.kind === 'restore' && !confirm('Alle vorhandenen Daten ersetzen?')) return;
-      run(() => d.kind === 'restore' ? api('POST', '/api/restore', JSON.parse(text)) : api('POST', '/api/import/inventory', text, true), 'Importiert');
+      run(() => d.kind === 'restore' ? api('POST', '/api/restore/all', JSON.parse(text)) : api('POST', '/api/import/inventory', text, true), 'Importiert');
       camSet = false;
     };
     f.click();
@@ -787,9 +803,13 @@ const ACT = {
     a.download = 'homelab.svg'; a.click();
   },
 };
+const READ_OK = new Set(['close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout']);
+const ro = () => S && S.role === 'read';
+document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {
   const b = e.target.closest('[data-act]');
   if (!b || !ACT[b.dataset.act]) return;
+  if (ro() && !READ_OK.has(b.dataset.act)) return;
   if (b.tagName === 'A') e.preventDefault();
   ACT[b.dataset.act](b.dataset, b);
 });

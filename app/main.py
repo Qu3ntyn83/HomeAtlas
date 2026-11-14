@@ -55,6 +55,7 @@ def _mask(i):
 def state(request: Request):
     return {
         "user": request.state.user["username"],
+        "role": request.state.user["role"],
         "settings": db.settings(),
         "vlans": db.q("SELECT * FROM vlans ORDER BY vid IS NULL, vid, id"),
         "racks": db.q("SELECT * FROM racks ORDER BY id"),
@@ -206,7 +207,7 @@ def export():
     return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="labvis-export.json"'})
 
 
-@app.post("/api/restore")
+@app.post("/api/restore/all")
 def restore(data: dict = Body(...)):
     if not all(t in data for t in TABLES):
         raise HTTPException(400, "Kein LabVis-Export")

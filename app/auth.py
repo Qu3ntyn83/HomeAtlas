@@ -1,4 +1,9 @@
-"""Anmeldung: Benutzerkonten (scrypt-Hash), Sitzungen per HttpOnly-Cookie, Login-Bremse."""
+"""Anmeldung: Benutzerkonten (scrypt-Hash), Sitzungen per HttpOnly-Cookie, Login-Bremse.
+
+Rechte:  read  – alles ansehen
+         write – zusätzlich dokumentieren, scannen, Anbindungen pflegen
+         admin – zusätzlich Benutzer, Systemeinstellungen, Export/Wiederherstellen
+"""
 import hashlib
 import hmac
 import os
@@ -15,6 +20,9 @@ COOKIE = "labvis_session"
 TTL = 30 * 86400
 MIN_LEN = 10
 PUBLIC = {"/healthz", "/login", "/api/auth/status", "/api/auth/login", "/api/auth/setup"}
+ROLES = ("read", "write", "admin")
+SELF_SERVICE = {"/api/auth/logout", "/api/auth/password"}          # darf jedes Konto
+ADMIN_ONLY = ("/api/auth/users", "/api/export", "/api/restore", "/api/settings/save")
 _fails = {}          # ip -> [anzahl, gesperrt_bis]
 router = APIRouter(prefix="/api/auth")
 
@@ -48,7 +56,7 @@ def bootstrap():
     """Erstes Konto aus der Umgebung anlegen (LABVIS_USER / LABVIS_PASSWORD), falls noch keines existiert."""
     pw = os.environ.get("LABVIS_PASSWORD", "")
     if pw and not has_users():
-        db.x("INSERT INTO users(username,pw,created) VALUES(?,?,?)",
+        db.x("INSERT INTO users(username,pw,role,created) VALUES(?,?,'admin',?)",
              (os.environ.get("LABVIS_USER") or "admin", hash_pw(pw), db.now()))
     db.x("DELETE FROM sessions WHERE expires<?", (db.now(),))
 
@@ -57,7 +65,7 @@ def current_user(request):
     tok = request.cookies.get(COOKIE)
     if not tok:
         return None
-    return db.one("SELECT u.id, u.username FROM sessions s JOIN users u ON u.id=s.user_id "
+    return db.one("SELECT u.id, u.username, u.role FROM sessions s JOIN users u ON u.id=s.user_id "
                   "WHERE s.token_hash=? AND s.expires>?", (_th(tok), db.now()))
 
 
@@ -98,6 +106,11 @@ async def middleware(request: Request, call_next):
         if path.startswith("/api/"):
             return JSONResponse({"detail": "Nicht angemeldet"}, 401)
         return RedirectResponse("/login", 303)
+    if path not in SELF_SERVICE:
+        if user["role"] == "read" and request.method not in ("GET", "HEAD", "OPTIONS"):
+            return JSONResponse({"detail": "Dieses Konto hat nur Leserechte"}, 403)
+        if user["role"] != "admin" and path.startswith(ADMIN_ONLY):
+            return JSONResponse({"detail": "Dafür sind Admin-Rechte nötig"}, 403)
     request.state.user = user
     return await call_next(request)
 
@@ -105,7 +118,8 @@ async def middleware(request: Request, call_next):
 @router.get("/status")
 def status(request: Request):
     u = current_user(request)
-    return {"setup": not has_users(), "user": u["username"] if u else None, "min_len": MIN_LEN}
+    return {"setup": not has_users(), "user": u["username"] if u else None,
+            "role": u["role"] if u else None, "min_len": MIN_LEN}
 
 
 @router.post("/setup")
@@ -113,7 +127,7 @@ def setup(request: Request, data: dict = Body(...)):
     if has_users():
         raise HTTPException(403, "Die Einrichtung ist bereits abgeschlossen")
     name = _valid(data.get("username"), data.get("password"))
-    uid = db.x("INSERT INTO users(username,pw,created) VALUES(?,?,?)", (name, hash_pw(data["password"]), db.now()))
+    uid = db.x("INSERT INTO users(username,pw,role,created) VALUES(?,?,'admin',?)", (name, hash_pw(data["password"]), db.now()))
     return _start_session(request, uid)
 
 
@@ -157,8 +171,20 @@ def password(request: Request, data: dict = Body(...)):
 
 @router.get("/users")
 def users(request: Request):
-    rows = db.q("SELECT id, username, created, last_login FROM users ORDER BY id")
+    rows = db.q("SELECT id, username, role, created, last_login FROM users ORDER BY id")
     return {"users": rows, "me": request.state.user["id"]}
+
+
+def _role(data, default=None):
+    role = data.get("role") or default
+    if role not in ROLES:
+        raise HTTPException(400, "Unbekanntes Recht")
+    return role
+
+
+def _last_admin(uid):
+    u = db.one("SELECT role FROM users WHERE id=?", (uid,))
+    return bool(u) and u["role"] == "admin" and db.one("SELECT count(*) c FROM users WHERE role='admin'")["c"] <= 1
 
 
 @router.post("/users")
@@ -166,13 +192,35 @@ def add_user(data: dict = Body(...)):
     name = _valid(data.get("username"), data.get("password"))
     if db.one("SELECT id FROM users WHERE username=?", (name,)):
         raise HTTPException(400, "Diesen Benutzernamen gibt es schon")
-    return {"id": db.x("INSERT INTO users(username,pw,created) VALUES(?,?,?)", (name, hash_pw(data["password"]), db.now()))}
+    return {"id": db.x("INSERT INTO users(username,pw,role,created) VALUES(?,?,?,?)",
+                       (name, hash_pw(data["password"]), _role(data, "read"), db.now()))}
+
+
+@router.put("/users/{uid}")
+def change_user(uid: int, request: Request, data: dict = Body(...)):
+    u = db.one("SELECT * FROM users WHERE id=?", (uid,))
+    if not u:
+        raise HTTPException(404, "Benutzer nicht gefunden")
+    if data.get("role") and data["role"] != u["role"]:
+        if uid == request.state.user["id"]:
+            raise HTTPException(400, "Das eigene Recht lässt sich nicht ändern")
+        if _role(data) != "admin" and _last_admin(uid):
+            raise HTTPException(400, "Es muss mindestens ein Admin-Konto bleiben")
+        db.x("UPDATE users SET role=? WHERE id=?", (data["role"], uid))
+    if data.get("password"):
+        _valid(u["username"], data["password"])
+        db.x("UPDATE users SET pw=? WHERE id=?", (hash_pw(data["password"]), uid))
+        if uid != request.state.user["id"]:
+            db.x("DELETE FROM sessions WHERE user_id=?", (uid,))
+    return {"ok": True}
 
 
 @router.delete("/users/{uid}")
 def del_user(uid: int, request: Request):
     if uid == request.state.user["id"]:
         raise HTTPException(400, "Das eigene Konto lässt sich nicht löschen")
+    if _last_admin(uid):
+        raise HTTPException(400, "Es muss mindestens ein Admin-Konto bleiben")
     db.x("DELETE FROM sessions WHERE user_id=?", (uid,))
     db.x("DELETE FROM users WHERE id=?", (uid,))
     return {"ok": True}
