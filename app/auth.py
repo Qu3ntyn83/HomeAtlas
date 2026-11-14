@@ -226,7 +226,7 @@ def del_user(uid: int, request: Request):
     return {"ok": True}
 
 
-def login_page(request: Request, static):
+def login_page(request: Request, render):
     if current_user(request):
         return RedirectResponse("/", 303)
-    return Response((static / "login.html").read_bytes(), media_type="text/html", headers={"Cache-Control": "no-store"})
+    return render("login.html")

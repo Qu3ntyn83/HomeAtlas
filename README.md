@@ -20,6 +20,16 @@ docker compose up -d --build
 
 Danach: `http://<host>:8099`. Die Daten liegen in `./data`.
 
+## Aktualisieren
+
+```bash
+./update.sh
+```
+
+Das Skript holt den aktuellen Stand, baut das Image neu, startet den Container frisch und zeigt am Ende, welche Version läuft.
+Die Version steht außerdem unten auf der Anmeldeseite und unter *System* („LabVis 0.7.0 · Build …"). Ändert sich der Build nach einem
+Update nicht, läuft noch der alte Container. Eine offene Seite lädt sich nach einem Update von selbst neu.
+
 ## Anmeldung
 
 LabVis hat eine eigene Anmeldeseite mit Benutzerkonten:
@@ -51,7 +61,7 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 | Bereich | Inhalt |
 |---|---|
 | **Topologie** | Karten frei verschieben, zoomen, VLAN-Filter, Klick öffnet Details, Gerätesuche springt zur Karte. VMs/Container erscheinen als Chips im Host, deren Container als Zeilen. Export als SVG. |
-| **Racks** | Racks mit beliebig vielen HE, Geräte per Ziehen umsetzen, freie HE antippen zum Einbauen. |
+| **Racks** | Racks mit beliebig vielen HE, Geräte per Ziehen umsetzen, freie HE antippen zum Einbauen. Platzhalter für Patchpanels (mit Portanzahl), Rackböden (mit den Geräten, die darauf stehen), Blenden und Kabelführungen. |
 | **Netzwerke** | VLANs mit Subnetz, Gateway, Farbe und Regel. Ansicht als Raster (IP-Belegung je Netz) oder als sortierbare Tabelle aller Adressen mit Suche, Netzwerk-Filter und CSV-Export. |
 | **Funde** | Was der Scan gefunden hat und noch nicht dokumentiert ist – mit Typ-Vermutung, Schnittstellen-Vorschlägen und Suche. |
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |

@@ -190,3 +190,15 @@ tr.clk{cursor:pointer}tr.clk:hover td{background:var(--panel2)}
 form.f select[multiple]{padding:4px}
 form.f select[multiple] option{padding:4px 6px;border-radius:4px}
 table.t input[type=checkbox]{width:16px;height:16px;accent-color:var(--link);cursor:pointer}
+
+/* ---------- Rack-Platzhalter */
+.rdev.ph{border-left-width:1px;color:var(--muted);font-size:12px}
+.rdev.ph b{font-weight:500}
+.rdev.pp{background:#141b25;gap:10px}
+.rdev.pp b{flex:none;max-width:38%}
+.pports{display:grid;gap:2px;flex:1;margin-left:auto;align-content:center}
+.pports i{display:block;height:7px;min-width:2px;background:#0b0f15;border:1px solid #4a586c;border-radius:1.5px}
+.rdev.sh{background:repeating-linear-gradient(90deg,#141b25 0 10px,#182130 10px 20px);border-style:solid;border-bottom:3px solid #4a586c}
+.rdev.bl{background:repeating-linear-gradient(135deg,#10161e 0 8px,#151c26 8px 16px);border-style:dashed}
+.rdev.cm{background:#10161e;border-style:dashed}
+.rdev.cm b::before{content:"≡ ";color:var(--faint)}

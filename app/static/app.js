@@ -5,7 +5,11 @@ const PAL = {BG: '#0b0f15', PANEL: '#111821', CHIP: '#19222e', BORDER: '#253042'
 const SPEED_W = {'100M': 1.4, '1G': 2.4, '2.5G': 3.8, '5G': 5.5, '10G': 8, '25G': 10, '40G': 12};
 const TYPES = {internet: 'Internet', router: 'Router', firewall: 'Firewall', switch: 'Switch', ap: 'Access Point',
   hypervisor: 'Hypervisor', server: 'Server', nas: 'NAS', workstation: 'Workstation', client: 'Client', iot: 'IoT',
-  printer: 'Drucker', vm: 'VM', container: 'Container', app: 'App', service: 'Dienst', other: 'Gerät'};
+  printer: 'Drucker', vm: 'VM', container: 'Container', app: 'App', service: 'Dienst', other: 'Gerät',
+  patchpanel: 'Patchpanel', shelf: 'Rackboden', blank: 'Blende', cablemgmt: 'Kabelführung'};
+const PASSIVE = new Set(['patchpanel', 'shelf', 'blank', 'cablemgmt']);   // Rack-Platzhalter: nur im Rack, nicht in der Topologie
+const onShelf = id => S.devices.filter(d => (d.meta || {}).shelf === id);
+const shelfOf = d => { const sh = dev((d.meta || {}).shelf); return sh && sh.type === 'shelf' && sh.rack_id ? sh : null; };
 const API_COL = '#d2a8ff';
 const KINDS = [['cable', 'Kabel'], ['wlan', 'WLAN (Funk)'], ['api', 'API / Datenabfrage'], ['logical', 'logisch (VPN, Cloud)']];
 const BANDS = ['2,4 GHz', '5 GHz', '6 GHz', '2,4 + 5 GHz', '2,4 + 5 + 6 GHz'], SECS = ['WPA2', 'WPA2/WPA3', 'WPA3', 'WPA-Enterprise', 'offen'];
@@ -67,6 +71,8 @@ async function load(silent) {
   try {
     S = await api('GET', '/api/state');
   } catch (e) { if (!silent) toast(e.message, true); return; }
+  if (load.build && S.build !== load.build && panelMode !== 'form') { location.reload(); return; }
+  load.build = S.build;
   $('#title').textContent = S.settings.title || 'LabVis';
   document.body.classList.toggle('ro', S.role === 'read');
   document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
@@ -340,7 +346,7 @@ function cardNode(c) {
   return `<g class="card${off}${sel === c.id ? ' sel' : ''}${multi.has(c.id) ? ' msel' : ''}" data-id="${c.id}" transform="translate(${c.x},${c.y})">${c.svg}</g>`;
 }
 function renderTopo() {
-  const tops = S.devices.filter(d => !d.parent_id);
+  const tops = S.devices.filter(d => !d.parent_id && !PASSIVE.has(d.type));
   if (!tops.length) {
     main.className = '';
     main.innerHTML = `<div class="page"><div class="hint"><b>Noch keine Geräte.</b><br>Lege unter <b>Netzwerke</b> ein Netz an und starte einen Scan, ` +
@@ -470,6 +476,7 @@ function showDevice(id, keep) {
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
     fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Notiz', esc(d.note)) +
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
+    fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
     fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>';
   if (addrsOf(d).length) h += `<h3>Weitere Adressen (${addrsOf(d).length})</h3>` + addrsOf(d).map((a, n) => { const av = vlan(a.vlan_id);
@@ -477,6 +484,10 @@ function showDevice(id, keep) {
       `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
       `<button class="btn sm" style="margin-left:auto" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button>` +
       `${a.mac ? `<span class="mono faint" style="flex-basis:100%;font-size:11.5px;padding-left:17px">${esc(a.mac)}${a.vendor ? ' · ' + esc(a.vendor) : ''}</span>` : ''}</div>`; }).join('');
+  if (d.type === 'shelf') h += `<h3>Auf diesem Boden (${onShelf(id).length})</h3>` + (onShelf(id).map(x => `<div class="rowl"><img src="${icon(x)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${x.id}">${esc(x.name)}</a>` +
+    `<button class="btn sm" style="margin-left:auto" data-act="shelfRemove" data-id="${x.id}" aria-label="Vom Boden nehmen">✕</button></div>`).join('') || '<span class="muted">leer</span>') +
+    `<div class="acts"><button class="btn sm pri" data-act="shelfAdd" data-id="${id}">Gerät daraufstellen</button></div>`;
+  if (d.type === 'patchpanel') h += `<dl class="facts">${fact('Ports', String((m.ports_n) || 24))}</dl><div class="acts"><button class="btn sm" data-act="ppPorts" data-id="${id}">Portanzahl ändern</button></div>`;
   if (ssidsOf(id).length) h += `<h3>WLANs (${ssidsOf(id).length})</h3>` + ssidsOf(id).map(w => { const wv = vlan(w.vlan_id);
     return `<div class="rowl"><b class="mono">${esc(w.ssid)}</b>${wv ? `<span style="color:${esc(wv.color)};font-size:12px">${esc(wv.vid != null ? vtag(wv) + ' · ' + wv.name : wv.name)}</span>` : ''}` +
       `<span class="muted" style="margin-left:auto;font-size:12px">${esc([w.band, w.security].filter(Boolean).join(' · '))}</span><button class="btn sm" data-act="editWlan" data-id="${w.id}">✎</button></div>`; }).join('');
@@ -542,7 +553,7 @@ function openForm(title, fields, val, onSave, extra, keepSel) {
   });
 }
 const vlanOpts = () => [['', '– keins –'], ...S.vlans.map(v => [v.id, v.vid != null ? `${vtag(v)} · ${v.name}` : v.name])];
-const devOpts = (skip) => [['', '– keins –'], ...S.devices.filter(d => d.id !== skip && !['app', 'service'].includes(d.type)).map(d => [d.id, d.name])];
+const devOpts = (skip) => [['', '– keins –'], ...S.devices.filter(d => d.id !== skip && !['app', 'service'].includes(d.type) && !PASSIVE.has(d.type)).map(d => [d.id, d.name])];
 function deviceForm(d) {
   const isNew = !d.id;
   openForm(isNew ? 'Neues Gerät' : esc(d.name), [
@@ -573,10 +584,25 @@ function showLink(id) { const l = S.links.find(x => x.id === id); if (l) linkFor
 
 // ------------------------------------------------------------ Racks
 const UH = 28;
+function rackBlock(d, r) {
+  const hh = d.rack_height || 1, pos = `top:${(r.units - (d.rack_u + hh - 1)) * UH + 1}px;height:${hh * UH - 2}px`;
+  if (d.type === 'patchpanel') {
+    const n = Math.min(96, Math.max(0, +(d.meta || {}).ports_n || 24)), perRow = hh > 1 && n > 24 ? Math.ceil(n / 2) : n;
+    return `<div class="rdev ph pp" data-id="${d.id}" style="${pos}" title="${esc(d.name)} · ${n} Ports"><b>${esc(d.name)}</b>` +
+      `<span class="pports" style="grid-template-columns:repeat(${perRow},1fr)">${'<i></i>'.repeat(n)}</span></div>`;
+  }
+  if (d.type === 'shelf') {
+    const on = onShelf(d.id);
+    return `<div class="rdev ph sh" data-id="${d.id}" style="${pos}"><b>${esc(d.name)}</b><span class="ip">${on.length ? esc(on.map(x => x.name).join(' · ')) : 'leer'}</span></div>`;
+  }
+  if (PASSIVE.has(d.type)) return `<div class="rdev ph ${d.type === 'blank' ? 'bl' : 'cm'}" data-id="${d.id}" style="${pos}"><b>${esc(d.name)}</b></div>`;
+  return `<div class="rdev" data-id="${d.id}" style="--c:${esc(vcol(d.vlan_id))};${pos}">` +
+    `<img src="${icon(d)}" alt=""><span class="dot ${d.status}"></span><b>${esc(d.name)}</b><span class="ip">${esc(d.ip || d.model || '')}</span></div>`;
+}
 function renderRacks() {
-  const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !['internet', 'client', 'iot', 'workstation'].includes(d.type));
+  const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d) && !['internet', 'client', 'iot', 'workstation'].includes(d.type));
   let h = `<div class="page" style="max-width:none"><div class="bar"><h2>Racks</h2><button class="btn pri" data-act="newRack">+ Rack</button>` +
-    `<span class="muted">Geräte per Ziehen verschieben · freie Höheneinheit antippen zum Einbauen</span></div>`;
+    `<span class="muted">Ziehen verschiebt · freie Höheneinheit antippen zum Einbauen von Geräten, Patchpanels, Rackböden und Blenden</span></div>`;
   if (!S.racks.length) h += '<div class="hint">Noch kein Rack angelegt.</div>';
   h += '<div class="racks">' + S.racks.map(r => {
     const ds = S.devices.filter(d => d.rack_id === r.id && d.rack_u);
@@ -588,10 +614,7 @@ function renderRacks() {
     const used = ds.reduce((a, d) => a + (d.rack_height || 1), 0);
     return `<div class="rack"><div class="rh"><b>${esc(r.name)}</b><span class="muted">${esc(r.location || '')} · ${used}/${r.units} HE belegt</span>` +
       `<button class="btn sm" style="margin-left:auto" data-act="editRack" data-id="${r.id}">✎</button></div>` +
-      `<div class="rbody" data-rack="${r.id}" data-units="${r.units}" style="height:${r.units * UH + 4}px">${rows}` +
-      ds.map(d => { const hh = d.rack_height || 1; return `<div class="rdev" data-id="${d.id}" style="--c:${esc(vcol(d.vlan_id))};top:${(r.units - (d.rack_u + hh - 1)) * UH + 1}px;height:${hh * UH - 2}px">` +
-        `<img src="${icon(d)}" alt=""><span class="dot ${d.status}"></span><b>${esc(d.name)}</b><span class="ip">${esc(d.ip || d.model || "")}</span></div>`; }).join('') +
-      '</div></div>';
+      `<div class="rbody" data-rack="${r.id}" data-units="${r.units}" style="height:${r.units * UH + 4}px">${rows}${ds.map(d => rackBlock(d, r)).join('')}</div></div>`;
   }).join('');
   if (S.racks.length) h += `<div class="unracked"><div class="rh"><b>Nicht eingebaut</b></div>` +
     (free.map(d => `<div class="rowl"><img src="${icon(d)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${d.id}">${esc(d.name)}</a>` +
@@ -606,13 +629,19 @@ function bindRack(body) {
     if (ro() || e.target.closest('.rdev')) return;
     const u = units - Math.floor((e.clientY - body.getBoundingClientRect().top) / UH);
     if (u < 1 || u > units || occupied(u, 1)) return;
-    const free = S.devices.filter(d => !d.parent_id && !d.rack_id);
-    if (!free.length) return toast('Kein freies Gerät – erst ein Gerät anlegen');
-    openForm(`Einbauen in HE ${u}`, [['id', 'Gerät', 'select', free.map(d => [d.id, d.name])], ['rack_height', 'Höhe in HE', 'number']], {rack_height: 1},
+    const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d));
+    const NEW = [['new:patchpanel', '＋ Patchpanel'], ['new:shelf', '＋ Rackboden'], ['new:blank', '＋ Blende'], ['new:cablemgmt', '＋ Kabelführung']];
+    openForm(`Einbauen in HE ${u}`, [['id', 'Was soll hier rein?', 'select', [...NEW, ...free.map(d => [d.id, d.name])]],
+      [['rack_height', 'Höhe in HE', 'number'], ['ports_n', 'Ports (nur Patchpanel)', 'number']], ['pname', 'Bezeichnung (nur für neue Platzhalter)', 'text', 'z. B. Patchpanel EG']],
+      {rack_height: 1, ports_n: 24, id: free.length ? free[0].id : 'new:patchpanel'},
       async data => {
         const hh = Math.max(1, +data.rack_height || 1);
         if (u + hh - 1 > units || occupied(u, hh)) throw new Error('Dort ist nicht genug Platz');
-        await api('PUT', '/api/devices/' + data.id, {rack_id: rid, rack_u: u, rack_height: hh});
+        if (String(data.id).startsWith('new:')) {
+          const type = data.id.slice(4);
+          await api('POST', '/api/devices', {name: data.pname || TYPES[type], type, rack_id: rid, rack_u: u, rack_height: hh,
+            meta: type === 'patchpanel' ? {ports_n: Math.min(96, Math.max(1, +data.ports_n || 24))} : {}});
+        } else await api('PUT', '/api/devices/' + data.id, {rack_id: rid, rack_u: u, rack_height: hh});
       });
   });
   body.querySelectorAll('.rdev').forEach(el => {
@@ -869,7 +898,7 @@ function renderSystem() {
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
     `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>`;
   else if (S.role === 'write') h += `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>`;
-  main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks</p></div>`;
+  main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks<br><span class="mono">LabVis ${esc(S.version)} · Build ${esc(S.build)}</span></p></div>`;
   $('#pwf').addEventListener('submit', async e => {
     e.preventDefault();
     try { await api('POST', '/api/auth/password', vals(e.target)); e.target.reset(); toast('Passwort geändert – andere Sitzungen wurden abgemeldet'); }
@@ -974,6 +1003,14 @@ const ACT = {
       async data => { for (const id of ids) if (id !== +data.target) await api('POST', `/api/devices/${data.target}/merge`, {other_id: id}); multi.clear(); },
       '<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">Die anderen Einträge gehen in diesem auf: Ihre Adressen werden zu weiteren Adressen, Kabel und enthaltene Geräte wandern mit. Das lässt sich nicht rückgängig machen.</p>');
   },
+  shelfAdd: d => {
+    const sh = dev(+d.id), free = S.devices.filter(x => !x.parent_id && !x.rack_id && !shelfOf(x) && !PASSIVE.has(x.type));
+    if (!free.length) return toast('Kein freies Gerät vorhanden');
+    sel = sh.id;
+    openForm(`Auf „${esc(sh.name)}“ stellen`, [['dev', 'Gerät', 'select', free.map(x => [x.id, x.name])]], {}, data => api('PUT', '/api/devices/' + data.dev, {meta: {shelf: sh.id}}), '', true);
+  },
+  shelfRemove: d => run(() => api('PUT', '/api/devices/' + d.id, {meta: {shelf: null}})),
+  ppPorts: d => { const n = prompt('Anzahl der Ports (1–96):', (dev(+d.id).meta || {}).ports_n || 24); if (n) run(() => api('PUT', '/api/devices/' + d.id, {meta: {ports_n: Math.min(96, Math.max(1, +n || 24))}})); },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
