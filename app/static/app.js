@@ -630,19 +630,23 @@ function bindRack(body) {
     const u = units - Math.floor((e.clientY - body.getBoundingClientRect().top) / UH);
     if (u < 1 || u > units || occupied(u, 1)) return;
     const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d));
-    const NEW = [['new:patchpanel', '＋ Patchpanel'], ['new:shelf', '＋ Rackboden'], ['new:blank', '＋ Blende'], ['new:cablemgmt', '＋ Kabelführung']];
-    openForm(`Einbauen in HE ${u}`, [['id', 'Was soll hier rein?', 'select', [...NEW, ...free.map(d => [d.id, d.name])]],
-      [['rack_height', 'Höhe in HE', 'number'], ['ports_n', 'Ports (nur Patchpanel)', 'number']], ['pname', 'Bezeichnung (nur für neue Platzhalter)', 'text', 'z. B. Patchpanel EG']],
-      {rack_height: 1, ports_n: 24, id: free.length ? free[0].id : 'new:patchpanel'},
+    // Erst die Art wählen (ohne Vorauswahl), dann erscheinen nur die dazu passenden Felder
+    const WHAT = [['', '– bitte wählen –'], ...(free.length ? [['device', 'Vorhandenes Gerät']] : []), ['patchpanel', 'Patchpanel'], ['shelf', 'Rackboden'],
+      ['blank', 'Blende'], ['cablemgmt', 'Kabelführung']];
+    openForm(`Einbauen in HE ${u}`, [['what', 'Was soll hier rein?', 'select', WHAT], ['id', 'Gerät', 'select', free.map(d => [d.id, d.name])],
+      ['pname', 'Bezeichnung', 'text', 'z. B. Patchpanel EG'], ['ports_n', 'Anzahl Ports', 'number'], ['rack_height', 'Höhe in HE', 'number']],
+      {rack_height: 1, ports_n: 24, what: ''},
       async data => {
+        if (!data.what) throw new Error('Bitte erst wählen, was eingebaut wird');
         const hh = Math.max(1, +data.rack_height || 1);
         if (u + hh - 1 > units || occupied(u, hh)) throw new Error('Dort ist nicht genug Platz');
-        if (String(data.id).startsWith('new:')) {
-          const type = data.id.slice(4);
-          await api('POST', '/api/devices', {name: data.pname || TYPES[type], type, rack_id: rid, rack_u: u, rack_height: hh,
-            meta: type === 'patchpanel' ? {ports_n: Math.min(96, Math.max(1, +data.ports_n || 24))} : {}});
-        } else await api('PUT', '/api/devices/' + data.id, {rack_id: rid, rack_u: u, rack_height: hh});
+        if (data.what === 'device') await api('PUT', '/api/devices/' + data.id, {rack_id: rid, rack_u: u, rack_height: hh});
+        else await api('POST', '/api/devices', {name: data.pname || TYPES[data.what], type: data.what, rack_id: rid, rack_u: u, rack_height: hh,
+          meta: data.what === 'patchpanel' ? {ports_n: Math.min(96, Math.max(1, +data.ports_n || 24))} : {}});
       });
+    const f = n => $(`[name=${n}]`, panel), show = (n, on) => { f(n).closest('label').hidden = !on; };
+    const sync = () => { const w = f('what').value; show('id', w === 'device'); show('pname', w && w !== 'device'); show('ports_n', w === 'patchpanel'); show('rack_height', !!w); };
+    f('what').addEventListener('change', sync); sync();
   });
   body.querySelectorAll('.rdev').forEach(el => {
     let sy = null, top0 = 0, moved = false;
