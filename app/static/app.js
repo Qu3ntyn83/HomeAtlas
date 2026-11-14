@@ -541,10 +541,29 @@ function formHtml(title, fields, val, extra = '') {
   return `<div class="phead"><h2>${title}</h2>${closeBtn}</div><form class="f">${fields.map(f => Array.isArray(f[0]) ? `<div class="two">${f.map(inp).join('')}</div>` : inp(f)).join('')}` +
     `<div class="acts"><button class="btn pri" type="submit">Speichern</button><button class="btn" type="button" data-act="cancel">Abbrechen</button>${extra}</div></form>`;
 }
+const BUILTIN_ICONS = ['type-server', 'type-hypervisor', 'type-switch', 'type-router', 'type-firewall', 'type-nas', 'type-ap', 'type-workstation', 'type-client',
+  'type-iot', 'type-printer', 'type-vm', 'type-container', 'type-app', 'type-service', 'type-internet', 'type-patchpanel', 'type-shelf', 'type-other',
+  'glyph-cpu', 'glyph-ram', 'glyph-ssd', 'glyph-hdd', 'glyph-nic', 'glyph-gpu', 'glyph-shield', 'glyph-antenna'];
+function iconHelp(inp) {
+  // Hilfe unter dem Icon-Feld: Vorschau, Link zur Icon-Übersicht, eingebaute Symbole zum Antippen
+  const box = document.createElement('div');
+  box.className = 'iconhelp';
+  box.innerHTML = `<div class="ihrow"><img alt="" width="30" height="30"><span>Name aus der <a href="https://dashboardicons.com" target="_blank" rel="noopener">Icon-Übersicht (dashboardicons.com) ↗</a> eintragen (klein, mit Bindestrichen), ` +
+    `z. B. <span class="mono">proxmox</span>, <span class="mono">home-assistant</span>, <span class="mono">synology</span>. Leer = Symbol nach Gerätetyp.</span></div>` +
+    `<details><summary>Eingebaute Symbole</summary><div class="ihgrid">${BUILTIN_ICONS.map(n => `<button type="button" data-icon="${n}" title="${n}" aria-label="${n}"><img src="/api/icon/${n}" alt="" width="22" height="22"></button>`).join('')}</div></details>`;
+  inp.closest('label').after(box);
+  const img = $('img', box);
+  const prev = () => { const v = inp.value.trim().toLowerCase(); img.style.visibility = v ? 'visible' : 'hidden'; if (v) img.src = '/api/icon/' + encodeURIComponent(v); };
+  let t; inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(prev, 400); });
+  box.addEventListener('click', e => { const b = e.target.closest('[data-icon]'); if (b) { inp.value = b.dataset.icon; prev(); } });
+  inp.setAttribute('autocapitalize', 'none'); inp.setAttribute('spellcheck', 'false');
+  prev();
+}
 function openForm(title, fields, val, onSave, extra, keepSel) {
   if (ro()) return;
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
+  if ($('[name=icon]', panel)) iconHelp($('[name=icon]', panel));
   $('form', panel).addEventListener('submit', e => {
     e.preventDefault();
     const data = {};
@@ -559,7 +578,7 @@ function deviceForm(d) {
   openForm(isNew ? 'Neues Gerät' : esc(d.name), [
     ['name', 'Name'], [['type', 'Typ', 'select', Object.entries(TYPES)], ['vlan_id', 'Netzwerk', 'select', vlanOpts()]],
     [['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']], [['hostname', 'Hostname'], ['url', 'Web-URL']],
-    [['model', 'Modell'], ['os', 'System']], ['icon', 'Icon (Name aus dashboard-icons, z. B. proxmox)'],
+    [['model', 'Modell'], ['os', 'System']], ['icon', 'Icon'],
     ['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['note', 'Notiz', 'area'],
     [['rack_id', 'Rack', 'select', [['', '– keins –'], ...S.racks.map(r => [r.id, r.name])]], ['rack_u', 'unterste HE', 'number']],
     ['rack_height', 'Höhe in HE', 'number'],
