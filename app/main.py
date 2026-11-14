@@ -185,6 +185,124 @@ def discovery(did: str, action: str):
     return {"ids": ids}
 
 
+# ---------------------------------------------------------------- Mehrere Adressen / Zusammenführen
+def _dev(did):
+    d = db.one("SELECT * FROM devices WHERE id=?", (did,))
+    if not d:
+        raise HTTPException(404, "Gerät nicht gefunden")
+    return d
+
+
+def _add_addr(dev, addr):
+    """Hängt eine weitere Adresse (NIC) an ein Gerät. Hat es noch keine Hauptadresse, wird sie zur Hauptadresse."""
+    addr = {k: v for k, v in addr.items() if v not in (None, "")}
+    if addr.get("mac"):
+        addr["mac"] = addr["mac"].upper()
+    if not addr.get("ip") and not addr.get("mac"):
+        return
+    if addr.get("ip") and not addr.get("vlan_id"):
+        addr["vlan_id"] = connectors.vlan_for_ip(addr["ip"])
+    meta = dev["meta"] or {}
+    known = [(dev.get("ip"), dev.get("mac"))] + [(a.get("ip"), a.get("mac")) for a in meta.get("addrs") or []]
+    if any((addr.get("ip") and addr.get("ip") == i) or (addr.get("mac") and addr.get("mac") == m) for i, m in known):
+        raise HTTPException(400, "Diese Adresse hat das Gerät schon")
+    if not dev.get("ip") and not dev.get("mac"):
+        upd = {k: addr.get(k) for k in ("ip", "mac", "vendor", "hostname", "vlan_id") if addr.get(k) and not dev.get(k)}
+        db.update("devices", dev["id"], upd)
+        dev.update(upd)
+        return
+    meta.setdefault("addrs", []).append(addr)
+    db.update("devices", dev["id"], {"meta": meta})
+    dev["meta"] = meta
+
+
+@app.post("/api/devices/{did}/addrs")
+def add_addr(did: int, data: dict = Body(...)):
+    if not data.get("ip") and not data.get("mac"):
+        raise HTTPException(400, "IP oder MAC angeben")
+    _add_addr(_dev(did), {k: data.get(k) for k in ("ip", "mac", "label")} |
+              {"vlan_id": int(data["vlan_id"]) if data.get("vlan_id") else None})
+    return {"ok": True}
+
+
+@app.delete("/api/devices/{did}/addrs/{idx}")
+def del_addr(did: int, idx: int):
+    dev = _dev(did)
+    meta = dev["meta"] or {}
+    if not 0 <= idx < len(meta.get("addrs") or []):
+        raise HTTPException(404, "Adresse nicht gefunden")
+    meta["addrs"].pop(idx)
+    db.update("devices", did, {"meta": meta})
+    return {"ok": True}
+
+
+@app.post("/api/devices/{did}/attach/{disc}")
+def attach(did: int, disc: int):
+    """Einen Fund als weitere Adresse an ein vorhandenes Gerät hängen."""
+    dev = _dev(did)
+    d = db.one("SELECT * FROM discoveries WHERE id=?", (disc,))
+    if not d:
+        raise HTTPException(404, "Fund nicht gefunden")
+    _add_addr(dev, {"ip": d["ip"], "mac": d.get("mac"), "vendor": d.get("vendor"), "hostname": d.get("hostname"),
+                    "vlan_id": d.get("vlan_id"), "up": True, "last_seen": d.get("last_seen")})
+    dev = _dev(did)
+    meta = dev["meta"] or {}
+    meta["suggestions"] = scanner._merge_sug(meta.get("suggestions") or [], (d["guess"] or {}).get("suggestions", []))
+    db.update("devices", did, {"meta": meta, "ports": sorted(set(dev.get("ports") or []) | set(d.get("ports") or [])),
+                               "status": "online", "last_seen": d.get("last_seen")})
+    db.x("DELETE FROM discoveries WHERE id=?", (disc,))
+    return {"ok": True}
+
+
+@app.post("/api/devices/{did}/merge")
+def merge(did: int, data: dict = Body(...)):
+    """Führt ein zweites Gerät in dieses über: Adressen, Kabel, Kinder und Anbindungen wandern mit."""
+    oid = int(data.get("other_id") or 0)
+    if oid == did:
+        raise HTTPException(400, "Zwei verschiedene Geräte wählen")
+    t, o = _dev(did), _dev(oid)
+    for start, other in ((t, oid), (o, did)):          # keines darf im anderen enthalten sein
+        cur, hops = start.get("parent_id"), 0
+        while cur and hops < 20:
+            if cur == other:
+                raise HTTPException(400, "Ein Gerät lässt sich nicht mit seinem Host oder Gast zusammenführen")
+            cur = (db.one("SELECT parent_id FROM devices WHERE id=?", (cur,)) or {}).get("parent_id")
+            hops += 1
+    om = o["meta"] or {}
+    if o.get("ip") or o.get("mac"):
+        _add_addr(t, {"ip": o.get("ip"), "mac": o.get("mac"), "vendor": o.get("vendor"), "hostname": o.get("hostname"),
+                      "vlan_id": o.get("vlan_id"), "label": o["name"], "up": o["status"] == "online",
+                      "last_seen": o.get("last_seen")})
+    for a in om.get("addrs") or []:
+        try:
+            _add_addr(t, a)
+        except HTTPException:
+            pass
+    t = _dev(did)
+    meta = t["meta"] or {}
+    meta["suggestions"] = scanner._merge_sug(meta.get("suggestions") or [], om.get("suggestions") or [])
+    for k in ("hw", "pools", "ifaces", "http"):
+        if om.get(k) and not meta.get(k):
+            meta[k] = om[k]
+    upd = {k: o[k] for k in ("model", "os", "vendor", "hostname", "url", "icon", "note", "vlan_id", "rack_id", "rack_u",
+                             "integration_id", "ext_id") if o.get(k) and not t.get(k)}
+    if "rack_id" in upd:
+        upd["rack_height"] = o.get("rack_height") or 1
+    if "integration_id" not in upd:
+        upd.pop("ext_id", None)
+    upd.update(meta=meta, ports=sorted(set(t.get("ports") or []) | set(o.get("ports") or [])))
+    if o["status"] == "online":
+        upd.update(status="online", last_seen=max(t.get("last_seen") or 0, o.get("last_seen") or 0))
+    db.update("devices", did, upd)
+    db.x("UPDATE links SET a_id=? WHERE a_id=?", (did, oid))
+    db.x("UPDATE links SET b_id=? WHERE b_id=?", (did, oid))
+    db.x("DELETE FROM links WHERE a_id=b_id")
+    db.x("UPDATE devices SET parent_id=? WHERE parent_id=?", (did, oid))
+    db.x("UPDATE integrations SET device_id=? WHERE device_id=?", (did, oid))
+    db.x("DELETE FROM devices WHERE id=?", (oid,))
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- Anbindungen
 @app.post("/api/integrations/{iid}/sync")
 def sync(iid: int):

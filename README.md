@@ -73,6 +73,18 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 
 Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status aus dem Scan.
 
+## Geräte mit mehreren Netzwerkkarten
+
+Ein Gerät kann beliebig viele Adressen haben (z. B. ein NAS mit vier NICs in zwei VLANs):
+
+- **Zusammenführen** (im Gerät): Ein zweiter Eintrag geht in diesem auf. Seine IP/MAC wird zur weiteren Adresse, Kabel, enthaltene
+  Geräte und Anbindungen wandern mit.
+- **Zu Gerät hinzufügen** (unter *Funde*): Ein neu gefundener Host wird direkt als weitere Adresse an ein vorhandenes Gerät gehängt.
+- **+ Adresse** (im Gerät): Adresse von Hand eintragen, etwa für ein Storage-Netz, das der Scanner nicht erreicht.
+
+Der Scan erkennt jede Adresse einzeln wieder. Das Gerät gilt als online, solange mindestens eine Adresse antwortet; die IP-Übersicht
+zeigt den Zustand je Adresse.
+
 ## Anbindungen einrichten
 
 **Proxmox** – read-only Token:

@@ -129,28 +129,61 @@ def discover(cidr, community="public"):
         return list(ex.map(lambda h: _enrich(h, community), up.values()))
 
 
+def _index():
+    """ip/mac → (geräte_id, adress_index); index None = Hauptadresse, sonst Position in meta.addrs."""
+    by_ip, by_mac = {}, {}
+    for d in db.q("SELECT id, ip, mac, meta FROM devices"):
+        if d.get("ip"):
+            by_ip.setdefault(d["ip"], (d["id"], None))
+        if d.get("mac"):
+            by_mac.setdefault(d["mac"].upper(), (d["id"], None))
+        for n, a in enumerate((d["meta"] or {}).get("addrs") or []):
+            if a.get("ip"):
+                by_ip.setdefault(a["ip"], (d["id"], n))
+            if a.get("mac"):
+                by_mac.setdefault(a["mac"].upper(), (d["id"], n))
+    return by_ip, by_mac
+
+
+def _merge_sug(old, new):
+    kinds = {s["kind"] for s in old}
+    return old + [s for s in new if s["kind"] not in kinds]
+
+
 def apply(vlan, hosts):
-    """Gleicht Scan-Ergebnisse mit Geräten ab. Unbekannte Hosts landen in der Fundliste."""
+    """Gleicht Scan-Ergebnisse mit Geräten ab. Unbekannte Hosts landen in der Fundliste.
+    Ein Gerät kann mehrere Adressen haben (meta.addrs); jede wird einzeln wiedererkannt."""
     now, new = db.now(), 0
     net = ipaddress.ip_network(vlan["subnet"], strict=False)
+    by_ip, by_mac = _index()
     seen = set()
     for h in hosts:
-        dev = None
-        if h.get("mac"):
-            dev = db.one("SELECT * FROM devices WHERE mac=?", (h["mac"],))
-        if not dev:
-            dev = db.one("SELECT * FROM devices WHERE ip=?", (h["ip"],))
+        hit = (by_mac.get(h["mac"]) if h.get("mac") else None) or by_ip.get(h["ip"])
+        dev = db.one("SELECT * FROM devices WHERE id=?", (hit[0],)) if hit else None
         if dev:
-            seen.add(dev["id"])
+            idx = hit[1]
+            seen.add((dev["id"], idx))
             meta = dev["meta"] or {}
-            meta["suggestions"] = h["guess"]["suggestions"]
-            meta["http"] = h["http"]
-            upd = {"status": "online", "last_seen": now, "ports": h["ports"], "meta": meta, "ip": h["ip"]}
-            for k in ("mac", "vendor", "hostname"):
-                if h.get(k) and not dev.get(k):
-                    upd[k] = h[k]
-            if not dev.get("vlan_id"):
-                upd["vlan_id"] = vlan["id"]
+            upd = {"status": "online", "last_seen": now}
+            if idx is None:
+                meta["suggestions"] = h["guess"]["suggestions"]
+                meta["http"] = h["http"]
+                meta["up0"] = True
+                upd.update(ports=h["ports"], ip=h["ip"])
+                for k in ("mac", "vendor", "hostname"):
+                    if h.get(k) and not dev.get(k):
+                        upd[k] = h[k]
+                if not dev.get("vlan_id"):
+                    upd["vlan_id"] = vlan["id"]
+            else:
+                a = meta["addrs"][idx]
+                a.update(ip=h["ip"], up=True, last_seen=now, vlan_id=a.get("vlan_id") or vlan["id"])
+                for k in ("mac", "vendor", "hostname"):
+                    if h.get(k) and not a.get(k):
+                        a[k] = h[k]
+                meta["suggestions"] = _merge_sug(meta.get("suggestions") or [], h["guess"]["suggestions"])
+                upd["ports"] = sorted(set(dev.get("ports") or []) | set(h["ports"]))
+            upd["meta"] = meta
             db.update("devices", dev["id"], upd)
             db.x("DELETE FROM discoveries WHERE ip=? OR (mac IS NOT NULL AND mac=?)", (h["ip"], h.get("mac")))
             continue
@@ -168,14 +201,26 @@ def apply(vlan, hosts):
             new += 1
             db.x("INSERT INTO discoveries(ip,mac,vendor,hostname,vlan_id,ports,http,snmp,guess,last_seen,first_seen)"
                  " VALUES(?,?,?,?,?,?,?,?,?,?,?)", vals + [now])
-    # bekannte Geräte in diesem Netz, die nicht geantwortet haben
-    for d in db.q("SELECT id, ip, source FROM devices WHERE ip IS NOT NULL AND ip<>''"):
+
+    def inside(ip):
         try:
-            inside = ipaddress.ip_address(d["ip"]) in net
+            return bool(ip) and ipaddress.ip_address(ip) in net
         except ValueError:
+            return False
+
+    # Adressen in diesem Netz, die nicht geantwortet haben; das Gerät ist online, solange eine Adresse antwortet
+    for d in db.q("SELECT id, ip, status, source, meta FROM devices"):
+        if d["source"] not in ("manual", "scan", "import"):
             continue
-        if inside and d["id"] not in seen and d["source"] in ("manual", "scan", "import"):
-            db.update("devices", d["id"], {"status": "offline"})
+        meta, addrs, changed = d["meta"] or {}, (d["meta"] or {}).get("addrs") or [], False
+        if inside(d["ip"]) and (d["id"], None) not in seen:
+            meta["up0"], changed = False, True
+        for n, a in enumerate(addrs):
+            if inside(a.get("ip")) and (d["id"], n) not in seen:
+                a["up"], changed = False, True
+        if changed:
+            up = (bool(d["ip"]) and meta.get("up0", d["status"] == "online")) or any(a.get("up") for a in addrs)
+            db.update("devices", d["id"], {"status": "online" if up else "offline", "meta": meta})
     return new
 
 
