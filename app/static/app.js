@@ -18,6 +18,7 @@ const main = $('#main'), panel = $('#panel');
 async function api(method, url, body, raw) {
   const r = await fetch(url, {method, headers: body && !raw ? {'Content-Type': 'application/json'} : {},
     body: body ? (raw ? body : JSON.stringify(body)) : undefined});
+  if (r.status === 401) { location.href = '/login'; throw new Error('Nicht angemeldet'); }
   if (!r.ok) {
     let msg = r.statusText;
     try { msg = (await r.json()).detail || msg; } catch (e) { /* kein JSON */ }
@@ -683,10 +684,36 @@ function renderSystem() {
     `<label>Sync-Intervall der Anbindungen (Minuten)<input name="sync_interval_min" type="number" min="1" value="${esc(s.sync_interval_min)}"></label></div>` +
     `<label>SNMP-Community für den Scan<input name="snmp_community" value="${esc(s.snmp_community)}"></label>` +
     `<div class="acts"><button class="btn pri">Speichern</button></div></form></div>` +
+    `<h3 class="faint" style="margin-top:24px">Konto</h3><div class="box"><div class="rowl" style="border:0;padding:0 0 10px">Angemeldet als <b>${esc(S.user)}</b>` +
+    `<button class="btn sm" style="margin-left:auto" data-act="logout">Abmelden</button></div><form class="f" id="pwf"><div class="two">` +
+    `<label>Aktuelles Passwort<input name="current" type="password" autocomplete="current-password" required></label>` +
+    `<label>Neues Passwort<input name="new" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
+    `<div class="acts" style="margin:0"><button class="btn">Passwort ändern</button></div></form></div>` +
+    `<h3 class="faint" style="margin-top:24px">Benutzer</h3><div class="box"><div id="users" class="muted">lädt …</div><form class="f" id="uf" style="margin-top:12px"><div class="two">` +
+    `<label>Neuer Benutzername<input name="username" autocomplete="off" autocapitalize="none" required></label>` +
+    `<label>Passwort (mind. 10 Zeichen)<input name="password" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
+    `<div class="acts" style="margin:0"><button class="btn">Benutzer anlegen</button></div></form></div>` +
     `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><div class="acts" style="margin:0"><a class="btn" href="/api/export" download>Export (JSON)</a>` +
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
     `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>` +
     `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks</p></div>`;
+  const vals = f => { const d = {}; for (const el of f.elements) if (el.name) d[el.name] = el.value; return d; };
+  $('#pwf').addEventListener('submit', async e => {
+    e.preventDefault();
+    try { await api('POST', '/api/auth/password', vals(e.target)); e.target.reset(); toast('Passwort geändert – andere Sitzungen wurden abgemeldet'); }
+    catch (x) { toast(x.message, true); }
+  });
+  $('#uf').addEventListener('submit', async e => {
+    e.preventDefault();
+    try { await api('POST', '/api/auth/users', vals(e.target)); toast('Benutzer angelegt'); renderSystem(); } catch (x) { toast(x.message, true); }
+  });
+  api('GET', '/api/auth/users').then(r => {
+    const box = $('#users'); if (!box) return;
+    box.className = '';
+    box.innerHTML = r.users.map(u => `<div class="rowl"><b>${esc(u.username)}</b><span class="muted">letzte Anmeldung: ${ago(u.last_login)}</span>` +
+      (u.id === r.me ? '<span class="pill" style="margin-left:auto">du</span>' :
+        `<button class="btn sm bad" style="margin-left:auto" data-act="delUser" data-id="${u.id}" data-name="${esc(u.username)}">Löschen</button>`) + '</div>').join('');
+  }).catch(() => {});
   $('#setf').addEventListener('submit', e => {
     e.preventDefault();
     const data = {}; for (const el of e.target.elements) if (el.name) data[el.name] = el.value;
@@ -728,6 +755,11 @@ const ACT = {
   editInteg: d => integForm(S.integrations.find(i => i.id === +d.id)),
   delInteg: d => { if (confirm('Anbindung löschen? Bereits ausgelesene Geräte bleiben erhalten.')) run(() => api('DELETE', '/api/integrations/' + d.id)); },
   sync: d => run(async () => { toast('Synchronisiere …'); const r = await api('POST', `/api/integrations/${d.id}/sync`); toast(r.status, r.status.startsWith('Fehler')); }),
+  logout: async () => { await fetch('/api/auth/logout', {method: 'POST'}); location.href = '/login'; },
+  delUser: async d => {
+    if (!confirm(`Benutzer „${d.name}“ löschen?`)) return;
+    try { await api('DELETE', '/api/auth/users/' + d.id); renderSystem(); } catch (x) { toast(x.message, true); }
+  },
   pick: d => {
     const f = document.createElement('input'); f.type = 'file'; f.accept = d.kind === 'restore' ? '.json' : '.yaml,.yml';
     f.onchange = async () => {
@@ -766,5 +798,8 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape' && !panel.hid
 (async () => {
   try { await Promise.all(['400 13px "Fira Sans"', '600 13px "Fira Sans"', '700 19px "Fira Sans"', '500 13px "Fira Sans"', '400 12px "Fira Code"', '500 12px "Fira Code"'].map(f => document.fonts.load(f))); } catch (e) { /* Fallback-Schrift */ }
   await load();
-  setInterval(() => { if (!busy && panelMode !== 'form' && !document.hidden) load(true); }, 15000);
+  setInterval(() => {
+    const typing = /INPUT|SELECT|TEXTAREA/.test((document.activeElement || {}).tagName || '');   // Eingaben nicht überschreiben
+    if (!busy && panelMode !== 'form' && !typing && !document.hidden) load(true);
+  }, 15000);
 })();

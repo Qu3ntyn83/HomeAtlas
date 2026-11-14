@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LabVis · Anmeldung</title>
+<link rel="icon" href="/static/icons/type-hypervisor.svg">
+<link rel="stylesheet" href="/static/style.css">
+<style>
+body{align-items:center;justify-content:center;overflow:auto;padding:24px;
+  background-image:radial-gradient(var(--grid) 1.2px,transparent 1.2px);background-size:22px 22px}
+.gate{width:100%;max-width:380px}
+.gate .tab{display:inline-block;background:var(--panel);border:1.6px solid var(--border);border-bottom:0;border-radius:10px 14px 0 0;
+  padding:7px 26px 6px 16px;font-size:19px;font-weight:700;position:relative;top:1.6px}
+.gate .tab small{font:500 13px var(--sans);color:var(--muted);margin-left:6px}
+.gate .body{background:var(--panel);border:1.6px solid var(--border);border-radius:0 10px 10px 10px;padding:22px 20px 20px}
+.gate p{color:var(--muted);font-size:13px;margin:0 0 16px}
+.gate .btn{width:100%;padding:10px;font-size:15px;margin-top:4px}
+#err{color:#ffb4ae;font-size:13px;min-height:19px;margin:0}
+</style>
+</head>
+<body>
+<div class="gate">
+  <div class="tab">LabVis<small id="mode">· Anmeldung</small></div>
+  <div class="body">
+    <p id="lead">Melde dich an, um deine Homelab-Dokumentation zu öffnen.</p>
+    <form class="f" id="f">
+      <label>Benutzername<input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>
+      <label>Passwort<input name="password" type="password" autocomplete="current-password" required></label>
+      <label id="rep" hidden>Passwort wiederholen<input name="repeat" type="password" autocomplete="new-password"></label>
+      <p id="err" role="alert"></p>
+      <button class="btn pri" id="go">Anmelden</button>
+    </form>
+  </div>
+</div>
+<script>
+'use strict';
+const f = document.getElementById('f'), err = document.getElementById('err'), go = document.getElementById('go');
+let setup = false;
+fetch('/api/auth/status').then(r => r.json()).then(s => {
+  if (s.user) { location.replace('/'); return; }
+  if (!s.setup) return;
+  setup = true;
+  document.getElementById('mode').textContent = '· Einrichtung';
+  document.getElementById('lead').textContent = `Es gibt noch kein Konto. Lege das erste Konto an (Passwort mindestens ${s.min_len} Zeichen).`;
+  document.getElementById('rep').hidden = false;
+  f.password.autocomplete = 'new-password';
+  go.textContent = 'Konto anlegen';
+});
+f.addEventListener('submit', async e => {
+  e.preventDefault();
+  err.textContent = '';
+  if (setup && f.password.value !== f.repeat.value) { err.textContent = 'Die Passwörter stimmen nicht überein'; return; }
+  go.disabled = true;
+  try {
+    const r = await fetch(setup ? '/api/auth/setup' : '/api/auth/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({username: f.username.value, password: f.password.value})});
+    if (r.ok) { location.replace('/'); return; }
+    err.textContent = (await r.json().catch(() => ({}))).detail || 'Anmeldung fehlgeschlagen';
+    f.password.select();
+  } catch (x) { err.textContent = 'Server nicht erreichbar'; }
+  go.disabled = false;
+});
+</script>
+</body>
+</html>

@@ -18,7 +18,21 @@ cp .env.example .env        # Passwort setzen
 docker compose up -d --build
 ```
 
-Danach: `http://<host>:8099` (Benutzer `admin`, Passwort aus `.env`). Die Daten liegen in `./data`.
+Danach: `http://<host>:8099`. Die Daten liegen in `./data`.
+
+## Anmeldung
+
+LabVis hat eine eigene Anmeldeseite mit Benutzerkonten:
+
+- **Erstes Konto:** Ist `LABVIS_PASSWORD` in der `.env` gesetzt, wird beim ersten Start das Konto `LABVIS_USER` (Standard `admin`)
+  damit angelegt. Ohne die Variable fragt die Seite beim ersten Aufruf nach Benutzername und Passwort. Richte das Konto in diesem
+  Fall direkt nach dem Start ein – bis dahin kann es jeder im Netz anlegen.
+- Die Variablen wirken nur, solange es noch kein Konto gibt. Danach änderst du Passwörter unter *System → Konto*.
+- Weitere Benutzer legst du unter *System → Benutzer* an. Alle Konten haben die gleichen Rechte.
+- Passwörter liegen als scrypt-Hash in der Datenbank, Sitzungen als HttpOnly-Cookie (30 Tage). Ein Passwortwechsel meldet alle
+  anderen Sitzungen des Kontos ab. Nach fünf Fehlversuchen wird die Anmeldung von dieser Adresse kurz gesperrt.
+- **Passwort vergessen:** `docker compose exec labvis python -c "from app import db; db.x('DELETE FROM sessions'); db.x('DELETE FROM users')"`
+  löscht alle Konten; danach greift wieder die Ersteinrichtung.
 
 Der Container läuft im **Host-Netz** mit `NET_RAW`. Nur so liefert der Scan MAC-Adressen und Hersteller
 für das Netz, in dem der Docker-Host selbst hängt. Für andere VLANs gilt: Die Firewall muss den Scan vom
@@ -89,10 +103,11 @@ Unter *System → inventory.yaml importieren* wird eine Datei im Format von home
 
 ## Stand und Grenzen
 
-- Getestet: API, Scan-Ablauf, Proxmox- und Docker-Sync gegen Test-Server, SNMP/LLDP-Auswertung mit Beispieldaten, Container-Build und -Start.
+- Getestet: API, Scan-Ablauf, Proxmox- und Docker-Sync gegen Test-Server, SNMP/LLDP-Auswertung mit Beispieldaten, Container-Build und -Start, Anmeldung (Einrichtung, Login, Sperre, Passwortwechsel, Benutzerverwaltung).
 - **Nicht** gegen echte Geräte getestet: SNMP-Abruf an realen Switches und der OPNsense-Connector (API-Pfade können je Version abweichen).
 - Zugangsdaten der Anbindungen liegen unverschlüsselt in `data/labvis.db` – das Verzeichnis entsprechend schützen.
-- Die eingebaute Anmeldung ist HTTP-Basic. Für Zugriff von außen gehört ein Reverse Proxy mit TLS davor.
+- Für Zugriff von außen gehört ein Reverse Proxy mit TLS davor; das Sitzungs-Cookie wird dann nur noch über HTTPS gesendet.
+- Es gibt keine Rollen: Jedes Konto darf alles.
 - Service-Icons werden beim ersten Bedarf von [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) geladen und in `data/icons` abgelegt.
 
 ## Lizenz und Dank

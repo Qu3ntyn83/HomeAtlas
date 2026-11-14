@@ -1,8 +1,6 @@
 """LabVis – interaktive Homelab-Dokumentation: Topologie, Racks, Netzwerke, Scanner, Anbindungen."""
-import base64
 import os
 import re
-import secrets
 import threading
 import time
 import urllib.request
@@ -12,7 +10,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import connectors, db, importer, scanner
+from . import auth, connectors, db, importer, scanner
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
@@ -24,24 +22,8 @@ MASK = "••••••••"
 SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if len(f) > 3 and f[3] == "password"}
 
 app = FastAPI(title="LabVis", docs_url="/api/docs", openapi_url="/api/openapi.json")
-PASSWORD = os.environ.get("LABVIS_PASSWORD", "")
-USER = os.environ.get("LABVIS_USER", "admin")
-
-
-@app.middleware("http")
-async def auth(request: Request, call_next):
-    if PASSWORD and request.url.path != "/healthz":
-        ok = False
-        h = request.headers.get("authorization", "")
-        if h.lower().startswith("basic "):
-            try:
-                u, _, p = base64.b64decode(h[6:]).decode().partition(":")
-                ok = secrets.compare_digest(u, USER) and secrets.compare_digest(p, PASSWORD)
-            except Exception:
-                ok = False
-        if not ok:
-            return Response("Anmeldung erforderlich", 401, {"WWW-Authenticate": 'Basic realm="LabVis"'})
-    return await call_next(request)
+app.middleware("http")(auth.middleware)
+app.include_router(auth.router)
 
 
 def _scheduler():
@@ -57,6 +39,7 @@ def _scheduler():
 @app.on_event("startup")
 def startup():
     db.init()
+    auth.bootstrap()
     ICON_CACHE.mkdir(parents=True, exist_ok=True)
     if not os.environ.get("LABVIS_NO_SCHEDULER"):
         threading.Thread(target=_scheduler, daemon=True).start()
@@ -69,8 +52,9 @@ def _mask(i):
 
 
 @app.get("/api/state")
-def state():
+def state(request: Request):
     return {
+        "user": request.state.user["username"],
         "settings": db.settings(),
         "vlans": db.q("SELECT * FROM vlans ORDER BY vid IS NULL, vid, id"),
         "racks": db.q("SELECT * FROM racks ORDER BY id"),
@@ -259,6 +243,11 @@ def icon(name: str):
         _icon_miss[name] = time.time()
     return FileResponse(STATIC / "icons" / "type-other.svg", media_type="image/svg+xml",
                         headers={"Cache-Control": "public, max-age=600"})
+
+
+@app.get("/login")
+def login_page(request: Request):
+    return auth.login_page(request, STATIC)
 
 
 @app.get("/healthz")
