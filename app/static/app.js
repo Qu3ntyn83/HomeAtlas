@@ -320,11 +320,19 @@ function renderTopo() {
     `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
     `<i class="tr"></i><span>Trunk (tagged)</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
+    `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
     `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
   if (!camSet) { fitView(); camSet = true; } else applyCam();
   bindCanvas();
   focusSel();
+  $('#topoq').addEventListener('input', e => {
+    const q = e.target.value, box = $('#tres');
+    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, TYPES[d.type], addrsOf(d).map(a => a.ip).join(' '))).slice(0, 10) : [];
+    box.hidden = !q.trim();
+    box.innerHTML = hits.map(d => `<button data-act="jump" data-id="${d.id}"><img src="${icon(d)}" width="18" height="18" alt=""><b>${esc(d.name)}</b><span class="mono">${esc(d.ip || '')}</span></button>`).join('') ||
+      '<span class="muted" style="padding:8px 10px;display:block">Keine Treffer</span>';
+  });
 }
 function focusSel() {
   const w = $('#world'); if (!w) return;
@@ -587,18 +595,51 @@ function bindRack(body) {
 }
 
 // ------------------------------------------------------------ Netzwerke
-function renderNets() {
+let netMode = 'grid', netQ = '', netVlan = '', netSort = {k: 'ip', dir: 1}, findQ = '';
+const match = (q, ...vals) => { q = q.trim().toLowerCase(); return !q || q.split(/\s+/).every(w => vals.some(x => String(x ?? '').toLowerCase().includes(w))); };
+const searchBox = (id, val, ph) => `<input class="inp search" id="${id}" type="search" value="${esc(val)}" placeholder="${ph}" aria-label="${ph}" autocomplete="off">`;
+function netRows() {
+  const rows = [];
+  for (const d of S.devices) {
+    const base = {id: d.id, name: d.name, type: TYPES[d.type] || d.type, hostname: d.hostname || ''};
+    const multi = addrsOf(d).length && d.meta.up0 !== undefined;
+    if (d.ip) rows.push({...base, ip: d.ip, mac: d.mac || '', vendor: d.vendor || '', vlan_id: d.vlan_id,
+      status: multi ? (d.meta.up0 ? 'online' : 'offline') : d.status || 'unknown', seen: d.last_seen});
+    for (const a of addrsOf(d)) if (a.ip) rows.push({...base, name: d.name + (a.label ? ' · ' + a.label : ''), ip: a.ip, mac: a.mac || '', vendor: a.vendor || '',
+      vlan_id: a.vlan_id, hostname: a.hostname || '', status: a.up === true ? 'online' : a.up === false ? 'offline' : 'unknown', seen: a.last_seen});
+  }
+  for (const f of S.discoveries.filter(x => x.state === 'pending')) rows.push({find: f.id, name: '', type: TYPES[(f.guess || {}).type] || '', hostname: f.hostname || '',
+    ip: f.ip, mac: f.mac || '', vendor: f.vendor || '', vlan_id: f.vlan_id, status: 'pending', seen: f.last_seen});
+  return rows;
+}
+const STATUS = {online: 'online', offline: 'offline', unknown: 'unbekannt', pending: 'neu gefunden'};
+function netFiltered() {
+  const k = netSort.k, key = r => k === 'ip' ? (/^\d+\.\d+\.\d+\.\d+$/.test(r.ip) ? ip2int(r.ip) : 0) : k === 'seen' ? (r.seen || 0) :
+    k === 'vlan' ? ((vlan(r.vlan_id) || {}).vid ?? 99999) : String(r[k] || '').toLowerCase();
+  return netRows().filter(r => (!netVlan || String(r.vlan_id) === netVlan) &&
+    match(netQ, r.ip, r.name, r.hostname, r.type, r.mac, r.vendor, STATUS[r.status], (vlan(r.vlan_id) || {}).name, vtag(vlan(r.vlan_id))))
+    .sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * netSort.dir; });
+}
+function netTable() {
+  const rows = netFiltered(), cols = [['status', 'Status'], ['ip', 'IP-Adresse'], ['name', 'Gerät'], ['hostname', 'Hostname'], ['type', 'Typ'], ['mac', 'MAC'],
+    ['vendor', 'Hersteller'], ['vlan', 'Netzwerk'], ['seen', 'Zuletzt gesehen']];
+  return `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${rows.length} ${rows.length === 1 ? 'Adresse' : 'Adressen'}</div><div class="tscroll"><table class="t sortable"><tr>` +
+    cols.map(([k, l]) => `<th data-act="netSort" data-k="${k}" aria-sort="${netSort.k === k ? (netSort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${l}${netSort.k === k ? (netSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>' +
+    (rows.map(r => { const v = vlan(r.vlan_id);
+      return `<tr class="clk" ${r.find ? 'data-act="goFinds"' : `data-act="show" data-id="${r.id}"`}><td><span class="dot ${r.status === 'pending' ? 'pending' : r.status}"></span> ${STATUS[r.status]}</td>` +
+        `<td class="mono">${esc(r.ip)}</td><td>${r.find ? '<span class="muted">– noch nicht dokumentiert –</span>' : `<b>${esc(r.name)}</b>`}</td><td class="mono">${esc(r.hostname)}</td><td>${esc(r.type)}</td>` +
+        `<td class="mono">${esc(r.mac)}</td><td>${esc(r.vendor)}</td><td>${v ? `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>` : ''}</td><td>${r.seen ? 'vor ' + ago(r.seen) : ''}</td></tr>`; }).join('') ||
+      `<tr><td colspan="${cols.length}" class="muted">Keine Treffer.</td></tr>`) + '</table></div>';
+}
+function netGrid() {
   const byIp = new Map();
   for (const d of S.devices) {
     for (const a of addrsOf(d)) if (a.ip) byIp.set(a.ip, {id: d.id, name: d.name + (a.label ? ' · ' + a.label : ''), status: a.up === true ? 'online' : a.up === false ? 'offline' : 'unknown'});
   }
   for (const d of S.devices) if (d.ip) byIp.set(d.ip, addrsOf(d).length && d.meta.up0 !== undefined ? {id: d.id, name: d.name, status: d.meta.up0 ? 'online' : 'offline'} : d);
   const pend = new Map(S.discoveries.filter(d => d.state === 'pending').map(d => [d.ip, d]));
-  let h = `<div class="page"><div class="bar"><h2>Netzwerke &amp; VLANs</h2><button class="btn pri" data-act="newVlan">+ Netzwerk</button><span class="grow"></span>` +
-    `<span class="muted">Auto-Scan alle ${esc(S.settings.scan_interval_min)} min</span></div>` +
-    (S.scanner.privileged ? '' : '<div class="hint" style="margin-bottom:14px">Der Container läuft ohne Root-Rechte – MAC-Adressen und Hersteller werden so nicht erkannt.</div>') +
-    '<div class="cards">';
-  for (const v of S.vlans) {
+  let h = '<div class="cards">';
+  for (const v of S.vlans.filter(v => match(netQ, vtag(v), v.name, v.subnet, v.note, v.gateway))) {
     const devs = S.devices.filter(d => inVlan(d, v.id));
     let grid = '';
     const m = /^(\d+\.\d+\.\d+\.\d+)\/(\d+)$/.exec(v.subnet || '');
@@ -621,8 +662,22 @@ function renderNets() {
   }
   h += '</div>' + (S.vlans.length ? `<div class="keyrow"><span><i style="background:var(--ok)"></i>online</span><span><i style="background:var(--bad)"></i>offline</span>` +
     `<span><i style="background:var(--faint)"></i>dokumentiert, Status unbekannt</span><span><i style="background:var(--warn)"></i>neu gefunden</span><span><i style="background:#161f2b"></i>frei</span></div>` :
-    '<div class="hint">Lege dein erstes Netz an (z. B. 192.168.178.0/24) und aktiviere den Auto-Scan.</div>') + '</div>';
-  main.innerHTML = h;
+    '<div class="hint">Lege dein erstes Netz an (z. B. 192.168.178.0/24) und aktiviere den Auto-Scan.</div>');
+  return h;
+}
+function fillNets() { const b = $('#netbody'); if (b) b.innerHTML = netMode === 'table' ? netTable() : netGrid(); }
+function renderNets() {
+  main.innerHTML = `<div class="page"><div class="bar"><h2>Netzwerke &amp; VLANs</h2><button class="btn pri" data-act="newVlan">+ Netzwerk</button>` +
+    `<span class="seg"><button class="btn sm${netMode === 'grid' ? ' on' : ''}" data-act="netMode" data-m="grid">Raster</button><button class="btn sm${netMode === 'table' ? ' on' : ''}" data-act="netMode" data-m="table">Tabelle</button></span>` +
+    `<span class="grow"></span><span class="muted">Auto-Scan alle ${esc(S.settings.scan_interval_min)} min</span></div>` +
+    `<div class="bar">${searchBox('netq', netQ, netMode === 'table' ? 'Suchen: IP, Name, MAC, Hersteller …' : 'Netzwerk suchen …')}` +
+    (netMode === 'table' ? `<select class="inp" id="netv" style="width:auto" aria-label="Netzwerk filtern"><option value="">Alle Netzwerke</option>${S.vlans.map(v => `<option value="${v.id}"${String(v.id) === netVlan ? ' selected' : ''}>${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</option>`).join('')}</select>` +
+      `<button class="btn" data-act="netCsv">CSV</button>` : '') + '</div>' +
+    (S.scanner.privileged ? '' : '<div class="hint" style="margin-bottom:14px">Der Container läuft ohne Root-Rechte – MAC-Adressen und Hersteller werden so nicht erkannt.</div>') +
+    '<div id="netbody"></div></div>';
+  fillNets();
+  $('#netq').addEventListener('input', e => { netQ = e.target.value; fillNets(); });
+  if ($('#netv')) $('#netv').addEventListener('change', e => { netVlan = e.target.value; fillNets(); });
 }
 function vlanForm(v) {
   const isNew = !v.id;
@@ -651,13 +706,18 @@ function renderFinds() {
         `<button class="btn sm pri" data-act="approve" data-id="${d.id}">Übernehmen</button><button class="btn sm" data-act="attach" data-id="${d.id}">Zu Gerät hinzufügen</button><button class="btn sm" data-act="ignore" data-id="${d.id}">Ignorieren</button>` :
         `<button class="btn sm" data-act="restore" data-id="${d.id}">Wiederherstellen</button>`) + '</div></div>';
   };
+  const fq = d => match(findQ, d.ip, d.hostname, d.mac, d.vendor, TYPES[(d.guess || {}).type], (d.guess || {}).os, (vlan(d.vlan_id) || {}).name,
+    (d.ports || []).join(' '), Object.values(d.http || {}).map(x => x.title).join(' '), ((d.guess || {}).suggestions || []).map(x => x.title).join(' '));
+  const body = () => { const p = pend.filter(fq), g = ign.filter(fq);
+    return (p.length ? `<div class="cards">${p.map(card).join('')}</div>` : `<div class="hint">${pend.length ? 'Keine Treffer.' : 'Keine neuen Geräte. Scans startest du unter <b>Netzwerke</b>.'}</div>`) +
+      (g.length ? `<h3 class="faint" style="margin-top:26px">Ignoriert (${g.length})</h3><div class="cards">${g.map(card).join('')}</div>` : ''); };
   main.innerHTML = `<div class="page"><div class="bar"><h2>Funde</h2>${pend.length ? `<button class="btn pri" data-act="approve" data-id="all">Alle ${pend.length} übernehmen</button>` : ''}` +
     `<span class="muted">Geräte aus dem Scan, die noch nicht dokumentiert sind</span></div>` +
-    (pend.length ? `<div class="cards">${pend.map(card).join('')}</div>` : '<div class="hint">Keine neuen Geräte. Scans startest du unter <b>Netzwerke</b>.</div>') +
-    (ign.length ? `<h3 class="faint" style="margin-top:26px">Ignoriert (${ign.length})</h3><div class="cards">${ign.map(card).join('')}</div>` : '') +
-    `<h3 class="faint" style="margin-top:26px">Scan-Verlauf</h3><table class="t"><tr><th>Netz</th><th>Start</th><th>Dauer</th><th>Hosts</th><th>Neu</th><th>Status</th></tr>` +
+    `<div class="bar">${searchBox('findq', findQ, 'Suchen: IP, Name, MAC, Hersteller, Port …')}</div><div id="findbody">${body()}</div>` +
+    `<h3 class="faint" style="margin-top:26px">Scan-Verlauf</h3><div class="tscroll"><table class="t"><tr><th>Netz</th><th>Start</th><th>Dauer</th><th>Hosts</th><th>Neu</th><th>Status</th></tr>` +
     S.scans.map(s => `<tr><td class="mono">${esc(s.network)}</td><td>vor ${ago(s.started)}</td><td>${s.finished ? Math.round(s.finished - s.started) + ' s' : '…'}</td>` +
-      `<td>${s.hosts}</td><td>${s.new}</td><td>${esc(s.status)}${s.log ? ' · ' + esc(s.log) : ''}</td></tr>`).join('') + '</table></div>';
+      `<td>${s.hosts}</td><td>${s.new}</td><td>${esc(s.status)}${s.log ? ' · ' + esc(s.log) : ''}</td></tr>`).join('') + '</table></div></div>';
+  $('#findq').addEventListener('input', e => { findQ = e.target.value; $('#findbody').innerHTML = body(); });
 }
 
 // ------------------------------------------------------------ Anbindungen
@@ -682,17 +742,36 @@ function renderInteg() {
 }
 function integForm(i) {
   const isNew = !i.id, k = S.kinds[i.kind];
-  const fields = [['name', 'Bezeichnung'], ...k.fields.map(([key, label, ph, type]) => ['c_' + key, label, type || 'text', ph]),
+  // Auswahl: dokumentierte Geräte und Funde aus dem Scan; passende (laut Erkennung) zuerst
+  const fits = sug => (sug || []).some(x => x.connector === i.kind);
+  const cands = [
+    ...S.devices.filter(d => d.ip && !['app', 'service'].includes(d.type)).map(d => ({v: 'd:' + d.id, ip: d.ip, name: d.name, fit: fits((d.meta || {}).suggestions), label: `${d.name} · ${d.ip}`})),
+    ...S.discoveries.filter(f => f.state === 'pending').map(f => ({v: 'f:' + f.id, ip: f.ip, name: (f.hostname || '').split('.')[0] || f.ip, fit: fits((f.guess || {}).suggestions),
+      label: `Fund: ${f.ip}${f.hostname ? ' · ' + f.hostname : ''}${f.vendor ? ' · ' + f.vendor : ''}`})),
+  ].sort((a, b) => b.fit - a.fit || a.label.localeCompare(b.label));
+  const pickOpts = [['', '– von Hand eintragen –'], ...cands.map(c => [c.v, (c.fit ? '★ ' : '') + c.label])];
+  const fields = [...(isNew && cands.length ? [['pick', `Gerät oder Fund auswählen (★ = ${esc(k.label)} erkannt)`, 'select', pickOpts]] : []),
+    ['name', 'Bezeichnung'], ...k.fields.map(([key, label, ph, type]) => ['c_' + key, label, type || 'text', ph]),
     ['device_id', 'Gehört zu Gerät', 'select', devOpts()], ['enabled', 'Automatisch synchronisieren', 'check']];
-  const val = {name: i.name, device_id: i.device_id, enabled: i.enabled ?? 1};
+  const val = {name: i.name, device_id: i.device_id, enabled: i.enabled ?? 1, pick: i.device_id ? 'd:' + i.device_id : ''};
   for (const [key, , ph] of k.fields) val['c_' + key] = (i.config || {})[key] ?? ph ?? '';
   openForm((isNew ? 'Neu: ' : '') + esc(k.label), fields, val, async data => {
     const body = {kind: i.kind, name: data.name, device_id: data.device_id, enabled: data.enabled, config: {}};
     for (const key in data) if (key.startsWith('c_')) body.config[key.slice(2)] = data[key];
+    if ((data.pick || '').startsWith('f:')) body.device_id = (await api('POST', `/api/discoveries/${data.pick.slice(2)}/approve`)).ids[0];   // Fund wird dabei übernommen
     const id = isNew ? (await api('POST', '/api/integrations', body)).id : (await api('PUT', '/api/integrations/' + i.id, body), i.id);
     const r = await api('POST', `/api/integrations/${id}/sync`);
     setTimeout(() => toast(r.status, r.status.startsWith('Fehler')), 50);
   }, '', !!i.device_id && sel === i.device_id);
+  const pick = $('[name=pick]', panel);
+  if (pick) pick.addEventListener('change', () => {
+    const c = cands.find(x => x.v === pick.value), f = n => $(`[name=${n}]`, panel);
+    if (!c) return;
+    if (f('c_host')) f('c_host').value = c.ip;
+    if (f('c_url')) f('c_url').value = `http://${c.ip}:2375`;
+    if (!f('name').value || f('name').dataset.auto) { f('name').value = c.name; f('name').dataset.auto = '1'; }
+    f('device_id').value = c.v.startsWith('d:') ? c.v.slice(2) : '';
+  });
 }
 
 // ------------------------------------------------------------ System
@@ -780,6 +859,20 @@ const ACT = {
     openForm(`${esc(f.ip)} hinzufügen zu`, [['device_id', 'Gerät', 'select', cand]], {},
       async data => { await api('POST', `/api/devices/${data.device_id}/attach/${f.id}`); });
   },
+  netMode: d => { netMode = d.m; renderNets(); },
+  netSort: d => { netSort = netSort.k === d.k ? {k: d.k, dir: -netSort.dir} : {k: d.k, dir: 1}; fillNets(); },
+  netCsv: () => {
+    const q = x => '"' + String(x ?? '').replace(/"/g, '""') + '"';
+    const lines = [['Status', 'IP', 'Gerät', 'Hostname', 'Typ', 'MAC', 'Hersteller', 'VLAN', 'Netzwerk'].map(q).join(';'),
+      ...netFiltered().map(r => { const v = vlan(r.vlan_id) || {}; return [STATUS[r.status], r.ip, r.name, r.hostname, r.type, r.mac, r.vendor, v.vid ?? '', v.name || ''].map(q).join(';'); })];
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], {type: 'text/csv'})); a.download = 'labvis-adressen.csv'; a.click();
+  },
+  jump: d => {
+    const x = dev(+d.id), c = cards.get(topOf(x.id)); if (!c) return;
+    cam.k = Math.max(cam.k, 0.75); cam.x = main.clientWidth / 2 - (c.x + c.w / 2) * cam.k; cam.y = main.clientHeight / 2 - (c.y + Math.min(c.h, 300) / 2) * cam.k;
+    applyCam(); $('#tres').hidden = true; $('#topoq').value = ''; showDevice(x.id);
+  },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
@@ -839,7 +932,7 @@ const ACT = {
     a.download = 'homelab.svg'; a.click();
   },
 };
-const READ_OK = new Set(['close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout']);
+const READ_OK = new Set(['close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {
