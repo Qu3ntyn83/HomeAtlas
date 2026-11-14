@@ -73,6 +73,12 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 
 Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status aus dem Scan.
 
+## Verbindungsarten
+
+Eine Verbindung zwischen zwei Geräten ist entweder ein **Kabel** (Breite = Geschwindigkeit, Trunk hell mit dunklem Kern), eine
+**API-Verbindung** (gestrichelt, mit Pfeil vom abfragenden zum abgefragten System und Protokoll als Beschriftung, z. B. „API · REST :8006")
+oder **logisch** (gepunktet, etwa VPN oder Cloud). Im Gerät legt „API-Verbindung" direkt eine solche an.
+
 ## Geräte mit mehreren Netzwerkkarten
 
 Ein Gerät kann beliebig viele Adressen haben (z. B. ein NAS mit vier NICs in zwei VLANs):

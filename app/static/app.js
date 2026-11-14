@@ -6,6 +6,8 @@ const SPEED_W = {'100M': 1.4, '1G': 2.4, '2.5G': 3.8, '5G': 5.5, '10G': 8, '25G'
 const TYPES = {internet: 'Internet', router: 'Router', firewall: 'Firewall', switch: 'Switch', ap: 'Access Point',
   hypervisor: 'Hypervisor', server: 'Server', nas: 'NAS', workstation: 'Workstation', client: 'Client', iot: 'IoT',
   printer: 'Drucker', vm: 'VM', container: 'Container', app: 'App', service: 'Dienst', other: 'Gerät'};
+const API_COL = '#d2a8ff';
+const KINDS = [['cable', 'Kabel'], ['api', 'API / Datenabfrage'], ['logical', 'logisch (VPN, Cloud)']];
 const TAB = 30, PAD = 16, GAP = 10;
 
 let S = null, view = 'topo', sel = null, panelMode = null, vfilter = null, busy = false;
@@ -237,7 +239,8 @@ function linksSvg() {
     const d = rounded(pts, 12), w = SPEED_W[l.speed] || 2.4, col = l.vlan_id ? vcol(l.vlan_id) : PAL.LINK;
     const off = vfilter && !l.trunk && l.vlan_id !== vfilter ? ' off' : '';
     let p;
-    if (l.kind === 'logical') p = `<path class="core" d="${d}" fill="none" stroke="${PAL.MUTED}" stroke-width="1.6" stroke-dasharray="2 6" stroke-linecap="round"/>`;
+    if (l.kind === 'api') p = `<path class="core" d="${d}" fill="none" stroke="${API_COL}" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr)"/>`;
+    else if (l.kind === 'logical') p = `<path class="core" d="${d}" fill="none" stroke="${PAL.MUTED}" stroke-width="1.6" stroke-dasharray="2 6" stroke-linecap="round"/>`;
     else if (l.trunk) p = `<path d="${d}" fill="none" stroke="${PAL.TRUNK}" stroke-width="${w + 3.4}" stroke-linecap="round" stroke-linejoin="round"/>` +
       `<path class="core" d="${d}" fill="none" stroke="${PAL.BG}" stroke-width="${Math.max(w - 1, 1)}" stroke-linecap="round" stroke-linejoin="round"/>`;
     else p = `<path class="core" d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -250,9 +253,10 @@ function linksSvg() {
         T(tx, ty, txt, {size: 10.5, weight: 500, mono: true, fill: c, anchor});
     };
     const sb = {b: 't', t: 'b', r: 'l', l: 'r'}[sa];
-    const lcol = l.trunk ? PAL.TRUNK : col;
+    const api = l.kind === 'api', lcol = api ? API_COL : l.kind === 'logical' ? PAL.MUTED : l.trunk ? PAL.TRUNK : col;
+    const btag = api ? ['API', l.note, l.b_port].filter(Boolean).join(' · ') : l.kind === 'logical' ? (l.note || '') : [l.speed, l.b_port].filter(Boolean).join(' · ');
     out += `<g class="link${off}" data-link="${l.id}" data-a="${A.id}" data-b="${B.id}">${p}<path class="hit" d="${d}"/>` +
-      tagAt(pb, sb, [l.speed, l.b_port].filter(Boolean).join(' · '), lcol, pbi) + tagAt(pa, sa, l.a_port || '', lcol, pai) + '</g>';
+      tagAt(pb, sb, btag, lcol, pbi) + tagAt(pa, sa, l.a_port || '', lcol, pai) + '</g>';
   }
   return out;
 }
@@ -311,11 +315,11 @@ function renderTopo() {
   }
   cards = new Map(tops.map(d => [d.id, buildCard(d)]));
   if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
-  main.innerHTML = `<svg id="svg"><g id="world" class="world"><g id="links">${linksSvg()}</g>` +
+  main.innerHTML = `<svg id="svg"><defs><marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${API_COL}"/></marker></defs><g id="world" class="world"><g id="links">${linksSvg()}</g>` +
     `<g id="cards">${[...cards.values()].map(cardNode).join('')}</g></g></svg>` +
     `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
-    `<i class="tr"></i><span>Trunk (tagged)</span><i class="lg"></i><span>logisch</span></div>` +
+    `<i class="tr"></i><span>Trunk (tagged)</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
     `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
   if (!camSet) { fitView(); camSet = true; } else applyCam();
@@ -414,7 +418,7 @@ function showDevice(id, keep) {
     `<div class="rowl" style="border:0"><span class="dot ${d.status}"></span>${d.status === 'online' ? 'online' : d.status === 'offline' ? 'offline' : 'Status unbekannt'}` +
     `<span class="muted">· zuletzt gesehen: ${ago(d.last_seen)}</span></div>` +
     `<div class="acts">${d.url ? `<a class="btn pri" href="${esc(d.url)}" target="_blank" rel="noopener">Öffnen ↗</a>` : ''}` +
-    `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button>` +
+    `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="api">API-Verbindung</button>` +
     `<button class="btn" data-act="addAddr" data-id="${id}">+ Adresse</button><button class="btn" data-act="merge" data-id="${id}">Zusammenführen</button>` +
     `<button class="btn" data-act="newDevice" data-parent="${id}">+ Kind</button><button class="btn bad" data-act="delDevice" data-id="${id}">Löschen</button></div>` +
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
@@ -455,7 +459,7 @@ function showDevice(id, keep) {
   if (links.length) h += '<h3>Verbindungen</h3>' + links.map(l => {
     const o = dev(l.a_id === id ? l.b_id : l.a_id), mp = l.a_id === id ? l.a_port : l.b_port, op = l.a_id === id ? l.b_port : l.a_port;
     return `<div class="rowl">${mp ? `<span class="mono">${esc(mp)}</span><span class="muted">→</span>` : ''}<a href="#" data-act="show" data-id="${o ? o.id : 0}">${esc(o ? o.name : '?')}</a>` +
-      `${op ? `<span class="mono muted">${esc(op)}</span>` : ''}<span class="pill" style="margin-left:auto">${esc(l.speed)}${l.trunk ? ' · Trunk' : ''}</span>` +
+      `${op ? `<span class="mono muted">${esc(op)}</span>` : ''}<span class="pill" style="margin-left:auto${l.kind === 'api' ? ';color:' + API_COL : ''}">${l.kind === 'api' ? (l.a_id === id ? 'API →' : '← API') + (l.note ? ' · ' + esc(l.note) : '') : l.kind === 'logical' ? 'logisch' : esc(l.speed) + (l.trunk ? ' · Trunk' : '')}</span>` +
       `<button class="btn sm" data-act="editLink" data-id="${l.id}">✎</button></div>`;
   }).join('');
   if (kids.length) h += `<h3>Enthält (${kids.length})</h3>` + kids.map(k => `<div class="rowl"><span class="dot ${k.status}"></span><a href="#" data-act="show" data-id="${k.id}">${esc(k.name)}</a>` +
@@ -509,9 +513,9 @@ function deviceForm(d) {
 function linkForm(l) {
   const isNew = !l.id;
   openForm(isNew ? 'Neue Verbindung' : 'Verbindung', [
-    [['a_id', 'Von', 'select', devOpts().slice(1)], ['a_port', 'Port']], [['b_id', 'Nach', 'select', devOpts().slice(1)], ['b_port', 'Port']],
-    [['speed', 'Geschwindigkeit', 'select', Object.keys(SPEED_W).map(s => [s, s])], ['kind', 'Art', 'select', [['cable', 'Kabel'], ['logical', 'logisch (VPN, Cloud)']]]],
-    ['vlan_id', 'Access-VLAN', 'select', vlanOpts()], ['trunk', 'Trunk (mehrere getaggte VLANs)', 'check'], ['note', 'Notiz'],
+    [['a_id', 'Von (bei API: fragt ab)', 'select', devOpts().slice(1)], ['a_port', 'Port']], [['b_id', 'Nach (bei API: wird abgefragt)', 'select', devOpts().slice(1)], ['b_port', 'Port']],
+    [['speed', 'Geschwindigkeit', 'select', Object.keys(SPEED_W).map(s => [s, s])], ['kind', 'Art', 'select', KINDS]],
+    ['vlan_id', 'Access-VLAN', 'select', vlanOpts()], ['trunk', 'Trunk (mehrere getaggte VLANs)', 'check'], ['note', 'Notiz / bei API: Protokoll, z. B. REST :8006, SNMP, MQTT'],
   ], l, async data => {
     if (isNew) await api('POST', '/api/links', data); else await api('PUT', '/api/links/' + l.id, data);
   }, isNew ? '' : `<button class="btn bad" type="button" data-act="delLink" data-id="${l.id}">Löschen</button>`, true);
@@ -776,7 +780,7 @@ const ACT = {
     openForm(`${esc(f.ip)} hinzufügen zu`, [['device_id', 'Gerät', 'select', cand]], {},
       async data => { await api('POST', `/api/devices/${data.device_id}/attach/${f.id}`); });
   },
-  newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: 'cable'}),
+  newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
   newRack: () => openForm('Neues Rack', [['name', 'Name'], [['units', 'Höheneinheiten', 'number'], ['location', 'Standort']], ['note', 'Notiz']], {units: 24},
