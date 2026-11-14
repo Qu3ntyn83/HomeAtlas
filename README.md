@@ -95,6 +95,13 @@ Unter *Netzwerke → WLAN* legst du SSIDs an: Name, Netzwerk/VLAN, Band, Verschl
 Die SSIDs erscheinen als Pillen auf den AP-Karten. Funkverbindungen zeichnest du als Verbindung der Art **WLAN** (gepunktet, in der
 Farbe des zugehörigen VLANs, beschriftet mit der SSID). SSIDs und WLAN-Clients werden von Hand gepflegt; einen UniFi-Abgleich gibt es noch nicht.
 
+## Räume
+
+Jedes Gerät hat ein Feld **Raum** (mit Vorschlagsliste der schon verwendeten Räume; auch über die Sammeländerung setzbar). In der
+Topologie schaltet **Normal | Räume** die Ansicht um: In der Raum-Ansicht steht je Raum eine Karte mit den Geräten darin, Verbindungen
+laufen zwischen den Räumen. VMs und Container zählen zum Raum ihres Hosts; Geräte ohne eigenen Eintrag übernehmen den Standort ihres
+Racks. Die Position der Raumkarten merkt sich der Browser.
+
 ## Bereiche und Smarthome
 
 Mit **+ Bereich** oder über die Mehrfachauswahl (**Gruppieren**) fasst du Geräte in der Topologie zu einem Bereich zusammen, etwa alle

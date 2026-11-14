@@ -56,7 +56,23 @@ const inVlan = (d, vid) => d.vlan_id === vid || addrsOf(d).some(a => a.vlan_id =
 const wlan = id => S.wlans.find(w => w.id === id);
 const ssidsOf = id => S.wlans.filter(w => (w.aps || []).includes(id));
 const vtag = v => v ? (v.vid != null ? 'VLAN ' + v.vid : v.name) : '';
-function topOf(id) { let d = dev(id), n = 0; while (d && d.parent_id && n++ < 8) d = dev(d.parent_id) || d; return d ? d.id : null; }
+function topDev(id) { let d = dev(id), n = 0; while (d && d.parent_id && n++ < 8) d = dev(d.parent_id) || d; return d || null; }
+// Raum eines Geräts: eigener Eintrag, sonst der des Hosts, sonst der Standort des Racks
+const NOROOM = 'Ohne Raum';
+function roomOf(d) {
+  const t = topDev(d.id) || d, sh = (t.meta || {}).shelf ? dev(t.meta.shelf) : null;
+  const rack = S.racks.find(r => r.id === (t.rack_id || (sh && sh.rack_id)));
+  return (d.room || t.room || (rack && rack.location) || '').trim() || NOROOM;
+}
+const allRooms = () => [...new Set(S.devices.map(d => (d.room || '').trim()).concat(S.racks.map(r => (r.location || '').trim())).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+let viewMode = 'normal', roomIds = new Map();
+// Karte, zu der ein Gerät gehört: in der Raum-Ansicht die Raumkarte, sonst die Karte des obersten Geräts
+function topOf(id) {
+  const t = topDev(id); if (!t) return null;
+  return viewMode === 'rooms' ? (roomIds.get(roomOf(t)) ?? t.id) : t.id;
+}
+const roomPos = () => { try { return JSON.parse(localStorage.getItem('labvis.roompos') || '{}'); } catch (e) { return {}; } };
+const saveRoomPos = (name, x, y) => { try { const p = roomPos(); p[name] = {x, y}; localStorage.setItem('labvis.roompos', JSON.stringify(p)); } catch (e) { /* Position gilt dann nur bis zum Neuladen */ } };
 function ago(t) {
   if (!t) return 'nie';
   const s = S.now - t;
@@ -331,7 +347,36 @@ function fitView() {
   applyCam();
 }
 function applyCam() { const w = $('#world'); if (w) w.setAttribute('transform', `translate(${cam.x.toFixed(1)},${cam.y.toFixed(1)}) scale(${cam.k.toFixed(4)})`); }
+function buildRoomCard(id, name, members, pos) {
+  const order = ['internet', 'router', 'firewall', 'switch', 'ap', 'hypervisor', 'server', 'nas'];
+  const rank = m => { const i = order.indexOf(m.type); return i < 0 ? 99 : i; };
+  members = [...members].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  const n = members.length, on = members.filter(m => m.status === 'online').length;
+  const tabW = Math.round(tw(name, 19, 700) + tw('\u00a0·\u00a0Raum', 13, 500) + 44);
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 10 ? 3 : n <= 24 ? 4 : 5;
+  const w = Math.ceil(Math.max(tabW + 60, 280, cols * 240 + (cols - 1) * GAP + 2 * PAD)), cw = (w - 2 * PAD - (cols - 1) * GAP) / cols;
+  let s = T(16, 21, name, {size: 19, weight: 700}) + T(16 + tw(name, 19, 700), 21, '\u00a0·\u00a0Raum', {size: 13, weight: 500, fill: PAL.MUTED}) +
+    T(PAD + 2, TAB + 24, `${n} ${n === 1 ? 'Gerät' : 'Geräte'} · ${on} online`, {size: 12.5, fill: PAL.MUTED});
+  const colY = Array(cols).fill(TAB + 38);
+  for (const m of members) { const ci = colY.indexOf(Math.min(...colY)); s += chipSvg(m, PAD + ci * (cw + GAP), colY[ci], cw, null); colY[ci] += chipH(m) + 8; }
+  const h = Math.ceil(Math.max(...colY) + PAD - 8);
+  return {id, d: {id, name, type: 'room'}, room: name, w, h, tabW, x: pos ? pos.x : null, y: pos ? pos.y : null, svg: folder(w, h, tabW, name === NOROOM ? PAL.TRUNKB : '#6b7c93', true) + s};
+}
+function buildRoomCards(tops) {
+  const by = new Map();
+  for (const d of tops) { const r = roomOf(d); if (!by.has(r)) by.set(r, []); by.get(r).push(d); }
+  const names = [...by.keys()].sort((a, b) => (a === NOROOM) - (b === NOROOM) || a.localeCompare(b)), pos = roomPos();
+  roomIds = new Map(names.map((nm, i) => [nm, -(i + 1)]));
+  cards = new Map(names.map(nm => [roomIds.get(nm), buildRoomCard(roomIds.get(nm), nm, by.get(nm), pos[nm])]));
+  let x = 60, y = 70, rowH = 0;                       // Räume ohne gemerkte Position: zeilenweise anordnen
+  for (const c of cards.values()) {
+    if (c.x != null) continue;
+    if (x > 60 && x + c.w > 2500) { x = 60; y += rowH + 90; rowH = 0; }
+    c.x = x; c.y = y; x += c.w + 80; rowH = Math.max(rowH, c.h);
+  }
+}
 function toggleMulti(id) {
+  if (!dev(id)) return;
   multi.has(id) ? multi.delete(id) : multi.add(id);
   document.querySelectorAll(`.card[data-id="${id}"], .chip[data-id="${id}"]`).forEach(n => n.classList.toggle('msel', multi.has(id)));
   document.querySelectorAll(`input[data-act="rowSel"][data-id="${id}"]`).forEach(n => { n.checked = multi.has(id); });
@@ -358,22 +403,25 @@ function renderTopo() {
       `(Format von homelab-diagram).<div class="acts"><button class="btn pri" data-act="newDevice">+ Gerät</button></div></div></div>`;
     return;
   }
-  cards = new Map(tops.map(d => [d.id, buildCard(d)]));
-  if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
+  if (viewMode === 'rooms') buildRoomCards(tops);
+  else {
+    cards = new Map(tops.map(d => [d.id, buildCard(d)]));
+    if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
+  }
   main.innerHTML = `<svg id="svg"><defs><marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${API_COL}"/></marker></defs><g id="world" class="world"><g id="links">${linksSvg()}</g>` +
     `<g id="cards">${[...cards.values()].map(cardNode).join('')}</g></g></svg>` +
     `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
     `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
     `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
-    `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
+    `<div id="tools"><span class="seg"><button class="btn${viewMode === 'normal' ? ' on' : ''}" data-act="viewMode" data-m="normal">Normal</button><button class="btn${viewMode === 'rooms' ? ' on' : ''}" data-act="viewMode" data-m="rooms">Räume</button></span><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
   if (!camSet) { fitView(); camSet = true; } else applyCam();
   bindCanvas();
   focusSel();
   $('#topoq').addEventListener('input', e => {
     const q = e.target.value, box = $('#tres');
-    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, TYPES[d.type], addrsOf(d).map(a => a.ip).join(' '))).slice(0, 10) : [];
+    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => a.ip).join(' '))).slice(0, 10) : [];
     box.hidden = !q.trim();
     box.innerHTML = hits.map(d => `<button data-act="jump" data-id="${d.id}"><img src="${icon(d)}" width="18" height="18" alt=""><b>${esc(d.name)}</b><span class="mono">${esc(d.ip || '')}</span></button>`).join('') ||
       '<span class="muted" style="padding:8px 10px;display:block">Keine Treffer</span>';
@@ -441,8 +489,10 @@ function bindCanvas() {
     if (mode === 'pinch') { if (pts.size < 2) mode = null; return; }
     busy = false;
     if (mode === 'card' && moved) {
-      const d = dev(card.id); d.x = card.x; d.y = card.y;
-      if (!ro()) api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
+      const d = dev(card.id);
+      if (!d) saveRoomPos(card.room, card.x, card.y);
+      else { d.x = card.x; d.y = card.y; }
+      if (d && !ro()) api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
     } else if (!moved) {
       const t = start.target, chip = t.closest('.chip'), cn = t.closest('.card'), ln = t.closest('.link');
       if ((selMode || e.ctrlKey || e.metaKey || e.shiftKey) && (chip || cn) && !ro()) toggleMulti(+(chip || cn).dataset.id);
@@ -479,6 +529,7 @@ function showDevice(id, keep) {
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
     fact('MAC', d.mac && `<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) +
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
+    fact('Raum', roomOf(d) !== NOROOM && esc(roomOf(d)) + (d.room ? '' : ' <span class="faint">(übernommen)</span>')) +
     fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Notiz', esc(d.note)) +
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
     fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
@@ -569,6 +620,10 @@ function openForm(title, fields, val, onSave, extra, keepSel) {
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
   if ($('[name=icon]', panel)) iconHelp($('[name=icon]', panel));
+  if ($('[name=room]', panel)) {   // vorhandene Räume als Vorschlagsliste
+    $('[name=room]', panel).setAttribute('list', 'roomlist');
+    $('form', panel).insertAdjacentHTML('beforeend', `<datalist id="roomlist">${allRooms().map(r => `<option value="${esc(r)}">`).join('')}</datalist>`);
+  }
   $('form', panel).addEventListener('submit', e => {
     e.preventDefault();
     const data = {};
@@ -583,7 +638,7 @@ function deviceForm(d) {
   openForm(isNew ? 'Neues Gerät' : esc(d.name), [
     ['name', 'Name'], [['type', 'Typ', 'select', Object.entries(TYPES)], ['vlan_id', 'Netzwerk', 'select', vlanOpts()]],
     [['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']], [['hostname', 'Hostname'], ['url', 'Web-URL']],
-    [['model', 'Modell'], ['os', 'System']], ['icon', 'Icon'],
+    [['model', 'Modell'], ['os', 'System']], ['room', 'Raum', 'text', 'z. B. Wohnzimmer, Keller'], ['icon', 'Icon'],
     ['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['note', 'Notiz', 'area'],
     [['rack_id', 'Rack', 'select', [['', '– keins –'], ...S.racks.map(r => [r.id, r.name])]], ['rack_u', 'unterste HE', 'number']],
     ['rack_height', 'Höhe in HE', 'number'],
@@ -699,7 +754,7 @@ const searchBox = (id, val, ph) => `<input class="inp search" id="${id}" type="s
 function netRows() {
   const rows = [];
   for (const d of S.devices) {
-    const base = {id: d.id, name: d.name, type: TYPES[d.type] || d.type, hostname: d.hostname || ''};
+    const base = {id: d.id, name: d.name, type: TYPES[d.type] || d.type, hostname: d.hostname || '', room: roomOf(d) === NOROOM ? '' : roomOf(d)};
     const multi = addrsOf(d).length && d.meta.up0 !== undefined;
     if (d.ip) rows.push({...base, ip: d.ip, mac: d.mac || '', vendor: d.vendor || '', vlan_id: d.vlan_id,
       status: multi ? (d.meta.up0 ? 'online' : 'offline') : d.status || 'unknown', seen: d.last_seen});
@@ -715,17 +770,17 @@ function netFiltered() {
   const k = netSort.k, key = r => k === 'ip' ? (/^\d+\.\d+\.\d+\.\d+$/.test(r.ip) ? ip2int(r.ip) : 0) : k === 'seen' ? (r.seen || 0) :
     k === 'vlan' ? ((vlan(r.vlan_id) || {}).vid ?? 99999) : String(r[k] || '').toLowerCase();
   return netRows().filter(r => (!netVlan || String(r.vlan_id) === netVlan) &&
-    match(netQ, r.ip, r.name, r.hostname, r.type, r.mac, r.vendor, STATUS[r.status], (vlan(r.vlan_id) || {}).name, vtag(vlan(r.vlan_id))))
+    match(netQ, r.ip, r.name, r.hostname, r.type, r.room, r.mac, r.vendor, STATUS[r.status], (vlan(r.vlan_id) || {}).name, vtag(vlan(r.vlan_id))))
     .sort((a, b) => { const x = key(a), y = key(b); return (x < y ? -1 : x > y ? 1 : 0) * netSort.dir; });
 }
 function netTable() {
-  const rows = netFiltered(), cols = [['status', 'Status'], ['ip', 'IP-Adresse'], ['name', 'Gerät'], ['hostname', 'Hostname'], ['type', 'Typ'], ['mac', 'MAC'],
+  const rows = netFiltered(), cols = [['status', 'Status'], ['ip', 'IP-Adresse'], ['name', 'Gerät'], ['hostname', 'Hostname'], ['type', 'Typ'], ['room', 'Raum'], ['mac', 'MAC'],
     ['vendor', 'Hersteller'], ['vlan', 'Netzwerk'], ['seen', 'Zuletzt gesehen']];
   return `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${rows.length} ${rows.length === 1 ? 'Adresse' : 'Adressen'}</div><div class="tscroll"><table class="t sortable"><tr><th style="width:28px"><input type="checkbox" data-act="rowAll" aria-label="Alle auswählen"></th>` +
     cols.map(([k, l]) => `<th data-act="netSort" data-k="${k}" aria-sort="${netSort.k === k ? (netSort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${l}${netSort.k === k ? (netSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>' +
     (rows.map(r => { const v = vlan(r.vlan_id);
       return `<tr class="clk" ${r.find ? 'data-act="goFinds"' : `data-act="show" data-id="${r.id}"`}><td>${r.find ? '' : `<input type="checkbox" data-act="rowSel" data-id="${r.id}"${multi.has(r.id) ? ' checked' : ''} aria-label="${esc(r.name)} auswählen">`}</td><td><span class="dot ${r.status === 'pending' ? 'pending' : r.status}"></span> ${STATUS[r.status]}</td>` +
-        `<td class="mono">${esc(r.ip)}</td><td>${r.find ? '<span class="muted">– noch nicht dokumentiert –</span>' : `<b>${esc(r.name)}</b>`}</td><td class="mono">${esc(r.hostname)}</td><td>${esc(r.type)}</td>` +
+        `<td class="mono">${esc(r.ip)}</td><td>${r.find ? '<span class="muted">– noch nicht dokumentiert –</span>' : `<b>${esc(r.name)}</b>`}</td><td class="mono">${esc(r.hostname)}</td><td>${esc(r.type)}</td><td>${esc(r.room || '')}</td>` +
         `<td class="mono">${esc(r.mac)}</td><td>${esc(r.vendor)}</td><td>${v ? `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>` : ''}</td><td>${r.seen ? 'vor ' + ago(r.seen) : ''}</td></tr>`; }).join('') ||
       `<tr><td colspan="${cols.length + 1}" class="muted">Keine Treffer.</td></tr>`) + '</table></div>';
 }
@@ -959,7 +1014,12 @@ const ACT = {
   show: d => { const x = dev(+d.id); if (x) showDevice(x.id); },
   goFinds: () => $('#tabs [data-view="finds"]').click(),
   fit: fitView,
-  relayout: () => { if (confirm('Alle Karten neu anordnen? Deine Positionen gehen verloren.')) { for (const c of cards.values()) { c.x = null; c.d.x = null; } renderTopo(); fitView(); } },
+  relayout: () => {
+    if (!confirm('Alle Karten neu anordnen? Deine Positionen gehen verloren.')) return;
+    if (viewMode === 'rooms') { try { localStorage.removeItem('labvis.roompos'); } catch (e) { /* egal */ } } else for (const c of cards.values()) { c.x = null; c.d.x = null; }
+    renderTopo(); fitView();
+  },
+  viewMode: d => { viewMode = d.m; closePanel(); renderTopo(); fitView(); },
   vfilter: d => { vfilter = vfilter === +d.id ? null : +d.id; renderTopo(); },
   newDevice: d => deviceForm({type: d.parent ? 'container' : 'server', parent_id: d.parent || '', rack_height: 1}),
   editDevice: d => deviceForm(dev(+d.id)),
@@ -987,8 +1047,8 @@ const ACT = {
   netSort: d => { netSort = netSort.k === d.k ? {k: d.k, dir: -netSort.dir} : {k: d.k, dir: 1}; fillNets(); },
   netCsv: () => {
     const q = x => '"' + String(x ?? '').replace(/"/g, '""') + '"';
-    const lines = [['Status', 'IP', 'Gerät', 'Hostname', 'Typ', 'MAC', 'Hersteller', 'VLAN', 'Netzwerk'].map(q).join(';'),
-      ...netFiltered().map(r => { const v = vlan(r.vlan_id) || {}; return [STATUS[r.status], r.ip, r.name, r.hostname, r.type, r.mac, r.vendor, v.vid ?? '', v.name || ''].map(q).join(';'); })];
+    const lines = [['Status', 'IP', 'Gerät', 'Hostname', 'Typ', 'Raum', 'MAC', 'Hersteller', 'VLAN', 'Netzwerk'].map(q).join(';'),
+      ...netFiltered().map(r => { const v = vlan(r.vlan_id) || {}; return [STATUS[r.status], r.ip, r.name, r.hostname, r.type, r.room || '', r.mac, r.vendor, v.vid ?? '', v.name || ''].map(q).join(';'); })];
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], {type: 'text/csv'})); a.download = 'labvis-adressen.csv'; a.click();
   },
@@ -1015,10 +1075,10 @@ const ACT = {
     openForm(`${ids.length} Geräte ändern`, [
       [['type', 'Typ', 'select', [...keep, ...Object.entries(TYPES)]], ['vlan_id', 'Netzwerk', 'select', [...keep, ['none', '– keins –'], ...S.vlans.map(v => [v.id, v.vid != null ? `${vtag(v)} · ${v.name}` : v.name])]]],
       ['parent_id', 'Läuft auf / gehört zu', 'select', [...keep, ['none', '– eigenständig –'], ...S.devices.filter(d => !multi.has(d.id) && !['app', 'service'].includes(d.type)).map(d => [d.id, d.name])]],
-      [['model', 'Modell (leer = unverändert)'], ['os', 'System (leer = unverändert)']], ['icon', 'Icon (leer = unverändert)'], ['note', 'Notiz (leer = unverändert)'],
+      [['model', 'Modell (leer = unverändert)'], ['os', 'System (leer = unverändert)']], ['room', 'Raum (leer = unverändert, „-“ = Raum entfernen)'], ['icon', 'Icon (leer = unverändert)'], ['note', 'Notiz (leer = unverändert)'],
     ], {}, async data => {
       const patch = {};
-      for (const [k, v] of Object.entries(data)) if (v !== '') patch[k] = v === 'none' ? '' : v;
+      for (const [k, v] of Object.entries(data)) if (v !== '') patch[k] = v === 'none' || (k === 'room' && v === '-') ? '' : v;
       if (!Object.keys(patch).length) throw new Error('Nichts zum Ändern ausgewählt');
       let fail = 0;
       for (const id of ids) await api('PUT', '/api/devices/' + id, patch).catch(() => { fail++; });
@@ -1122,7 +1182,7 @@ const ACT = {
     a.download = 'homelab.svg'; a.click();
   },
 };
-const READ_OK = new Set(['close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
+const READ_OK = new Set(['viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {
