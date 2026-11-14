@@ -95,6 +95,15 @@ Unter *Netzwerke → WLAN* legst du SSIDs an: Name, Netzwerk/VLAN, Band, Verschl
 Die SSIDs erscheinen als Pillen auf den AP-Karten. Funkverbindungen zeichnest du als Verbindung der Art **WLAN** (gepunktet, in der
 Farbe des zugehörigen VLANs, beschriftet mit der SSID). SSIDs und WLAN-Clients werden von Hand gepflegt; einen UniFi-Abgleich gibt es noch nicht.
 
+## Bereiche und Smarthome
+
+Mit **+ Bereich** oder über die Mehrfachauswahl (**Gruppieren**) fasst du Geräte in der Topologie zu einem Bereich zusammen, etwa alle
+Smarthome-Lampen. Der Bereich erscheint als gestrichelte Karte, die Geräte darin als Chips mit Status; Verbindungen zu einem Gerät im
+Bereich enden an der Bereichskarte. „Bereich auflösen" gibt die Geräte wieder frei, gelöscht wird dabei nichts.
+
+Für Smarthome gibt es eigene Gerätetypen mit Symbol: Lampe, Steckdose, Sensor, Thermostat, Rollladen, Türschloss, Saugroboter, Kamera,
+Lautsprecher, TV/Medien.
+
 ## Mehrere Geräte auf einmal ändern
 
 In der Topologie „Auswählen" antippen (oder Strg/Umschalt + Klick) und Karten oder Chips markieren; in der Adress-Tabelle gibt es

@@ -134,7 +134,10 @@ def settings():
 
 
 def delete_device(did):
-    """Löscht ein Gerät samt Kindern und Verbindungen."""
+    """Löscht ein Gerät samt Kindern und Verbindungen. Ein Bereich (Typ group) gibt seine Geräte nur frei."""
+    me = one("SELECT type FROM devices WHERE id=?", (did,))
+    if me and me["type"] == "group":
+        x("UPDATE devices SET parent_id=NULL, x=NULL, y=NULL WHERE parent_id=?", (did,))
     for ch in q("SELECT id FROM devices WHERE parent_id=?", (did,)):
         delete_device(ch["id"])
     x("DELETE FROM links WHERE a_id=? OR b_id=?", (did, did))
