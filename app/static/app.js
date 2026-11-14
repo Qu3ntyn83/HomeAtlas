@@ -7,10 +7,12 @@ const TYPES = {internet: 'Internet', router: 'Router', firewall: 'Firewall', swi
   hypervisor: 'Hypervisor', server: 'Server', nas: 'NAS', workstation: 'Workstation', client: 'Client', iot: 'IoT',
   printer: 'Drucker', vm: 'VM', container: 'Container', app: 'App', service: 'Dienst', other: 'Gerät'};
 const API_COL = '#d2a8ff';
-const KINDS = [['cable', 'Kabel'], ['api', 'API / Datenabfrage'], ['logical', 'logisch (VPN, Cloud)']];
+const KINDS = [['cable', 'Kabel'], ['wlan', 'WLAN (Funk)'], ['api', 'API / Datenabfrage'], ['logical', 'logisch (VPN, Cloud)']];
+const BANDS = ['2,4 GHz', '5 GHz', '6 GHz', '2,4 + 5 GHz', '2,4 + 5 + 6 GHz'], SECS = ['WPA2', 'WPA2/WPA3', 'WPA3', 'WPA-Enterprise', 'offen'];
 const TAB = 30, PAD = 16, GAP = 10;
 
 let S = null, view = 'topo', sel = null, panelMode = null, vfilter = null, busy = false;
+let multi = new Set(), selMode = false;
 let cards = new Map(), cam = {x: 40, y: 60, k: 0.6}, camSet = false;
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -45,6 +47,8 @@ const vcol = id => (vlan(id) || {}).color || PAL.TRUNKB;
 const icon = d => '/api/icon/' + encodeURIComponent(d.icon || 'type-' + (d.type || 'other'));
 const addrsOf = d => (d.meta && d.meta.addrs) || [];
 const inVlan = (d, vid) => d.vlan_id === vid || addrsOf(d).some(a => a.vlan_id === vid);
+const wlan = id => S.wlans.find(w => w.id === id);
+const ssidsOf = id => S.wlans.filter(w => (w.aps || []).includes(id));
 const vtag = v => v ? (v.vid != null ? 'VLAN ' + v.vid : v.name) : '';
 function topOf(id) { let d = dev(id), n = 0; while (d && d.parent_id && n++ < 8) d = dev(d.parent_id) || d; return d ? d.id : null; }
 function ago(t) {
@@ -68,6 +72,8 @@ async function load(silent) {
   document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
   $('#badge').textContent = S.discoveries.filter(d => d.state === 'pending').length || '';
   $('#scanstate').textContent = S.scanner.running ? `Scan ${S.scanner.running} · ${S.scanner.phase}` : '';
+  for (const id of [...multi]) if (!dev(id)) multi.delete(id);
+  bulkBar();
   if (busy) return;
   render();
   if (sel && panelMode === 'device' && dev(sel)) showDevice(sel, true);
@@ -110,7 +116,7 @@ function chipH(c) {
 function chipSvg(c, x, y, w, parentVlan) {
   const h = chipH(c), col = vcol(c.vlan_id), gk = kidsOf(c.id);
   const stroke = c.vlan_id && c.vlan_id !== parentVlan ? col : PAL.BORDER;
-  const off = vfilter && !inVlan(c, vfilter) ? ' off' : '';
+  const off = (vfilter && !inVlan(c, vfilter) ? ' off' : '') + (multi.has(c.id) ? ' msel' : '');
   const tag = c.meta && c.meta.vmid ? (c.type === 'vm' ? 'VM ' : 'CT ') + c.meta.vmid : '';
   const tagW = tag ? tw(tag, 10.5, 400, true) + 8 : 0;
   let s = `<g class="chip${off}" data-id="${c.id}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">` +
@@ -149,7 +155,8 @@ function buildCard(d) {
   const extra = addrsOf(d).length;
   const addr = [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
   const l1 = d.model || d.note || '', l3 = d.os || (d.model ? d.note : '') || '';
-  const headW = 70 + Math.max(tw(l1, 14, 500), tw(addr, 12.5, 400, true), tw(l3, 12)) + 40;
+  const headW = Math.max(70 + Math.max(tw(l1, 14, 500), tw(addr, 12.5, 400, true), tw(l3, 12)) + 40,
+    ssidsOf(d.id).reduce((a, w) => a + tw(w.ssid, 11.5, 500, true) + 40, 0) + 2 * PAD);
   // Blöcke: Gruppen (falls vorhanden) bleiben zusammen, sonst jeder Chip einzeln
   const blocks = [];
   const grouped = kids.some(k => k.meta && k.meta.group);
@@ -171,6 +178,18 @@ function buildCard(d) {
   s += T(70, TAB + 29, l1, {size: 14, weight: 500}) + T(70, TAB + 47, addr, {size: 12.5, mono: true, fill: d.vlan_id ? col : PAL.MUTED}) +
     T(70, TAB + 63, l3, {size: 12, fill: PAL.MUTED});
   let y = TAB + 80;
+  const ssids = ssidsOf(d.id);
+  if (ssids.length) {
+    let px = PAD;
+    for (const w of ssids) {
+      const c = w.vlan_id ? vcol(w.vlan_id) : PAL.MUTED, pw = tw(w.ssid, 11.5, 500, true) + 34;
+      s += `<rect x="${px}" y="${y - 2}" width="${pw.toFixed(1)}" height="22" rx="11" fill="${PAL.CHIP}" stroke="${c}" stroke-width="1.2"/>` +
+        `<path d="M${px + 9},${y + 8} a7,7 0 0 1 10,0 M${px + 11.500},${y + 11} a3.500,3.500 0 0 1 5,0" fill="none" stroke="${c}" stroke-width="1.5" stroke-linecap="round"/><circle cx="${px + 14}" cy="${y + 14}" r="1.3" fill="${c}"/>` +
+        T(px + 25, y + 13, w.ssid, {size: 11.5, weight: 500, mono: true, fill: c});
+      px += pw + 6;
+    }
+    y += 30;
+  }
   if (hw.length) {
     hw.forEach((t, i) => {
       const tx = PAD + (i % cols) * (cw + GAP), ty = y + Math.floor(i / cols) * 52;
@@ -189,7 +208,7 @@ function buildCard(d) {
     for (const c of b.chips) { s += chipSvg(c, bx, colY[ci], cw, d.vlan_id); colY[ci] += chipH(c) + 8; }
     if (b.title) colY[ci] += 6;
   }
-  const h = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : TAB + 78);
+  const h = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : TAB + 78 + (ssids.length ? 32 : 0));
   s = folder(w, h, tabW, stroke) + s;
   return {id: d.id, d, w, h, tabW, x: d.x, y: d.y, svg: s};
 }
@@ -207,6 +226,7 @@ function rounded(p, r) {
   const e = p[p.length - 1];
   return d + ` L${e[0].toFixed(1)},${e[1].toFixed(1)}`;
 }
+const wcol = l => { const w = wlan(l.wlan_id); return w && w.vlan_id ? vcol(w.vlan_id) : l.vlan_id ? vcol(l.vlan_id) : PAL.LINK; };
 function linksSvg() {
   const segs = [], ends = new Map();
   const push = (c, side, e) => { const k = c.id + side; if (!ends.has(k)) ends.set(k, {c, side, list: []}); ends.get(k).list.push(e); };
@@ -240,6 +260,7 @@ function linksSvg() {
     const off = vfilter && !l.trunk && l.vlan_id !== vfilter ? ' off' : '';
     let p;
     if (l.kind === 'api') p = `<path class="core" d="${d}" fill="none" stroke="${API_COL}" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr)"/>`;
+    else if (l.kind === 'wlan') p = `<path class="core" d="${d}" fill="none" stroke="${wcol(l)}" stroke-width="3.2" stroke-dasharray="0.1 8" stroke-linecap="round" stroke-linejoin="round"/>`;
     else if (l.kind === 'logical') p = `<path class="core" d="${d}" fill="none" stroke="${PAL.MUTED}" stroke-width="1.6" stroke-dasharray="2 6" stroke-linecap="round"/>`;
     else if (l.trunk) p = `<path d="${d}" fill="none" stroke="${PAL.TRUNK}" stroke-width="${w + 3.4}" stroke-linecap="round" stroke-linejoin="round"/>` +
       `<path class="core" d="${d}" fill="none" stroke="${PAL.BG}" stroke-width="${Math.max(w - 1, 1)}" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -253,8 +274,8 @@ function linksSvg() {
         T(tx, ty, txt, {size: 10.5, weight: 500, mono: true, fill: c, anchor});
     };
     const sb = {b: 't', t: 'b', r: 'l', l: 'r'}[sa];
-    const api = l.kind === 'api', lcol = api ? API_COL : l.kind === 'logical' ? PAL.MUTED : l.trunk ? PAL.TRUNK : col;
-    const btag = api ? ['API', l.note, l.b_port].filter(Boolean).join(' · ') : l.kind === 'logical' ? (l.note || '') : [l.speed, l.b_port].filter(Boolean).join(' · ');
+    const api = l.kind === 'api', lcol = api ? API_COL : l.kind === 'wlan' ? wcol(l) : l.kind === 'logical' ? PAL.MUTED : l.trunk ? PAL.TRUNK : col;
+    const btag = api ? ['API', l.note, l.b_port].filter(Boolean).join(' · ') : l.kind === 'wlan' ? ['WLAN', (wlan(l.wlan_id) || {}).ssid, l.note].filter(Boolean).join(' · ') : l.kind === 'logical' ? (l.note || '') : [l.speed, l.b_port].filter(Boolean).join(' · ');
     out += `<g class="link${off}" data-link="${l.id}" data-a="${A.id}" data-b="${B.id}">${p}<path class="hit" d="${d}"/>` +
       tagAt(pb, sb, btag, lcol, pbi) + tagAt(pa, sa, l.a_port || '', lcol, pai) + '</g>';
   }
@@ -300,9 +321,23 @@ function fitView() {
   applyCam();
 }
 function applyCam() { const w = $('#world'); if (w) w.setAttribute('transform', `translate(${cam.x.toFixed(1)},${cam.y.toFixed(1)}) scale(${cam.k.toFixed(4)})`); }
+function toggleMulti(id) {
+  multi.has(id) ? multi.delete(id) : multi.add(id);
+  document.querySelectorAll(`.card[data-id="${id}"], .chip[data-id="${id}"]`).forEach(n => n.classList.toggle('msel', multi.has(id)));
+  document.querySelectorAll(`input[data-act="rowSel"][data-id="${id}"]`).forEach(n => { n.checked = multi.has(id); });
+  bulkBar();
+}
+function bulkBar() {
+  let b = $('#bulk');
+  if (!multi.size || ro()) { if (b) b.remove(); return; }
+  if (!b) { b = document.createElement('div'); b.id = 'bulk'; document.body.appendChild(b); }
+  b.innerHTML = `<b>${multi.size} ausgewählt</b><button class="btn sm pri" data-act="bulkEdit">Ändern</button>` +
+    (multi.size > 1 ? '<button class="btn sm" data-act="bulkMerge">Zusammenführen</button>' : '') +
+    '<button class="btn sm bad" data-act="bulkDel">Löschen</button><button class="btn sm" data-act="bulkClear">Aufheben</button>';
+}
 function cardNode(c) {
   const off = vfilter && !inVlan(c.d, vfilter) && !S.devices.some(k => topOf(k.id) === c.id && inVlan(k, vfilter)) ? ' off' : '';
-  return `<g class="card${off}${sel === c.id ? ' sel' : ''}" data-id="${c.id}" transform="translate(${c.x},${c.y})">${c.svg}</g>`;
+  return `<g class="card${off}${sel === c.id ? ' sel' : ''}${multi.has(c.id) ? ' msel' : ''}" data-id="${c.id}" transform="translate(${c.x},${c.y})">${c.svg}</g>`;
 }
 function renderTopo() {
   const tops = S.devices.filter(d => !d.parent_id);
@@ -319,9 +354,9 @@ function renderTopo() {
     `<g id="cards">${[...cards.values()].map(cardNode).join('')}</g></g></svg>` +
     `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
-    `<i class="tr"></i><span>Trunk (tagged)</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
+    `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
     `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
-    `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
+    `<div id="tools"><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
   if (!camSet) { fitView(); camSet = true; } else applyCam();
   bindCanvas();
@@ -400,7 +435,8 @@ function bindCanvas() {
       if (!ro()) api('POST', '/api/positions/save', [{id: card.id, x: card.x, y: card.y}]).catch(er => toast(er.message, true));
     } else if (!moved) {
       const t = start.target, chip = t.closest('.chip'), cn = t.closest('.card'), ln = t.closest('.link');
-      if (chip) showDevice(+chip.dataset.id); else if (cn) showDevice(+cn.dataset.id);
+      if ((selMode || e.ctrlKey || e.metaKey || e.shiftKey) && (chip || cn) && !ro()) toggleMulti(+(chip || cn).dataset.id);
+      else if (chip) showDevice(+chip.dataset.id); else if (cn) showDevice(+cn.dataset.id);
       else if (ln) showLink(+ln.dataset.link); else closePanel();
     }
     mode = null;
@@ -426,7 +462,7 @@ function showDevice(id, keep) {
     `<div class="rowl" style="border:0"><span class="dot ${d.status}"></span>${d.status === 'online' ? 'online' : d.status === 'offline' ? 'offline' : 'Status unbekannt'}` +
     `<span class="muted">· zuletzt gesehen: ${ago(d.last_seen)}</span></div>` +
     `<div class="acts">${d.url ? `<a class="btn pri" href="${esc(d.url)}" target="_blank" rel="noopener">Öffnen ↗</a>` : ''}` +
-    `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="api">API-Verbindung</button>` +
+    `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="wlan">WLAN-Verbindung</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="api">API-Verbindung</button>` +
     `<button class="btn" data-act="addAddr" data-id="${id}">+ Adresse</button><button class="btn" data-act="merge" data-id="${id}">Zusammenführen</button>` +
     `<button class="btn" data-act="newDevice" data-parent="${id}">+ Kind</button><button class="btn bad" data-act="delDevice" data-id="${id}">Löschen</button></div>` +
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
@@ -441,6 +477,9 @@ function showDevice(id, keep) {
       `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
       `<button class="btn sm" style="margin-left:auto" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button>` +
       `${a.mac ? `<span class="mono faint" style="flex-basis:100%;font-size:11.5px;padding-left:17px">${esc(a.mac)}${a.vendor ? ' · ' + esc(a.vendor) : ''}</span>` : ''}</div>`; }).join('');
+  if (ssidsOf(id).length) h += `<h3>WLANs (${ssidsOf(id).length})</h3>` + ssidsOf(id).map(w => { const wv = vlan(w.vlan_id);
+    return `<div class="rowl"><b class="mono">${esc(w.ssid)}</b>${wv ? `<span style="color:${esc(wv.color)};font-size:12px">${esc(wv.vid != null ? vtag(wv) + ' · ' + wv.name : wv.name)}</span>` : ''}` +
+      `<span class="muted" style="margin-left:auto;font-size:12px">${esc([w.band, w.security].filter(Boolean).join(' · '))}</span><button class="btn sm" data-act="editWlan" data-id="${w.id}">✎</button></div>`; }).join('');
   if ((m.hw || []).length) h += '<h3>Hardware</h3>' + m.hw.map(t => `<div class="tile"><img src="/api/icon/${esc(t.icon || 'glyph-cpu')}" alt=""><div>` +
     `<span class="lab">${esc(t.label)}</span><br><b>${esc(t.value)}</b><small>${esc(t.sub)}</small></div></div>`).join('');
   if ((m.pools || []).length) h += '<h3>Storage</h3>' + m.pools.map(p => `<div class="box" style="margin-bottom:6px"><b>${esc(p.name)}</b> <span class="muted">${esc(p.layout)}</span>` +
@@ -467,7 +506,7 @@ function showDevice(id, keep) {
   if (links.length) h += '<h3>Verbindungen</h3>' + links.map(l => {
     const o = dev(l.a_id === id ? l.b_id : l.a_id), mp = l.a_id === id ? l.a_port : l.b_port, op = l.a_id === id ? l.b_port : l.a_port;
     return `<div class="rowl">${mp ? `<span class="mono">${esc(mp)}</span><span class="muted">→</span>` : ''}<a href="#" data-act="show" data-id="${o ? o.id : 0}">${esc(o ? o.name : '?')}</a>` +
-      `${op ? `<span class="mono muted">${esc(op)}</span>` : ''}<span class="pill" style="margin-left:auto${l.kind === 'api' ? ';color:' + API_COL : ''}">${l.kind === 'api' ? (l.a_id === id ? 'API →' : '← API') + (l.note ? ' · ' + esc(l.note) : '') : l.kind === 'logical' ? 'logisch' : esc(l.speed) + (l.trunk ? ' · Trunk' : '')}</span>` +
+      `${op ? `<span class="mono muted">${esc(op)}</span>` : ''}<span class="pill" style="margin-left:auto${l.kind === 'api' ? ';color:' + API_COL : ''}">${l.kind === 'api' ? (l.a_id === id ? 'API →' : '← API') + (l.note ? ' · ' + esc(l.note) : '') : l.kind === 'wlan' ? 'WLAN' + (wlan(l.wlan_id) ? ' · ' + esc(wlan(l.wlan_id).ssid) : '') : l.kind === 'logical' ? 'logisch' : esc(l.speed) + (l.trunk ? ' · Trunk' : '')}</span>` +
       `<button class="btn sm" data-act="editLink" data-id="${l.id}">✎</button></div>`;
   }).join('');
   if (kids.length) h += `<h3>Enthält (${kids.length})</h3>` + kids.map(k => `<div class="rowl"><span class="dot ${k.status}"></span><a href="#" data-act="show" data-id="${k.id}">${esc(k.name)}</a>` +
@@ -483,6 +522,7 @@ function formHtml(title, fields, val, extra = '') {
   const inp = ([k, label, type, opts]) => {
     const v = val[k] ?? '';
     if (type === 'select') return `<label>${label}<select name="${k}">${opts.map(([ov, ol]) => `<option value="${esc(ov)}"${String(ov) === String(v) ? ' selected' : ''}>${esc(ol)}</option>`).join('')}</select></label>`;
+    if (type === 'multi') return `<label>${label}<select name="${k}" multiple size="${Math.min(6, Math.max(3, opts.length))}">${opts.map(([ov, ol]) => `<option value="${esc(ov)}"${(v || []).map(String).includes(String(ov)) ? ' selected' : ''}>${esc(ol)}</option>`).join('')}</select></label>`;
     if (type === 'check') return `<label class="chk"><input type="checkbox" name="${k}"${+v ? ' checked' : ''}>${label}</label>`;
     if (type === 'area') return `<label>${label}<textarea name="${k}" rows="2">${esc(v)}</textarea></label>`;
     return `<label>${label}<input name="${k}" type="${type || 'text'}" value="${esc(v)}"${opts ? ` placeholder="${esc(opts)}"` : ''} autocomplete="off"></label>`;
@@ -497,7 +537,7 @@ function openForm(title, fields, val, onSave, extra, keepSel) {
   $('form', panel).addEventListener('submit', e => {
     e.preventDefault();
     const data = {};
-    for (const el of e.target.elements) if (el.name) data[el.name] = el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
+    for (const el of e.target.elements) if (el.name) data[el.name] = el.multiple ? [...el.selectedOptions].map(o => +o.value) : el.type === 'checkbox' ? (el.checked ? 1 : 0) : el.value.trim();
     run(async () => { await onSave(data); if (sel) panelMode = 'device'; else closePanel(); }, 'Gespeichert');
   });
 }
@@ -523,6 +563,7 @@ function linkForm(l) {
   openForm(isNew ? 'Neue Verbindung' : 'Verbindung', [
     [['a_id', 'Von (bei API: fragt ab)', 'select', devOpts().slice(1)], ['a_port', 'Port']], [['b_id', 'Nach (bei API: wird abgefragt)', 'select', devOpts().slice(1)], ['b_port', 'Port']],
     [['speed', 'Geschwindigkeit', 'select', Object.keys(SPEED_W).map(s => [s, s])], ['kind', 'Art', 'select', KINDS]],
+    ['wlan_id', 'WLAN / SSID (nur bei Art „WLAN“)', 'select', [['', '– keins –'], ...S.wlans.map(w => [w.id, w.ssid])]],
     ['vlan_id', 'Access-VLAN', 'select', vlanOpts()], ['trunk', 'Trunk (mehrere getaggte VLANs)', 'check'], ['note', 'Notiz / bei API: Protokoll, z. B. REST :8006, SNMP, MQTT'],
   ], l, async data => {
     if (isNew) await api('POST', '/api/links', data); else await api('PUT', '/api/links/' + l.id, data);
@@ -623,13 +664,13 @@ function netFiltered() {
 function netTable() {
   const rows = netFiltered(), cols = [['status', 'Status'], ['ip', 'IP-Adresse'], ['name', 'Gerät'], ['hostname', 'Hostname'], ['type', 'Typ'], ['mac', 'MAC'],
     ['vendor', 'Hersteller'], ['vlan', 'Netzwerk'], ['seen', 'Zuletzt gesehen']];
-  return `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${rows.length} ${rows.length === 1 ? 'Adresse' : 'Adressen'}</div><div class="tscroll"><table class="t sortable"><tr>` +
+  return `<div class="muted" style="font-size:12.5px;margin-bottom:8px">${rows.length} ${rows.length === 1 ? 'Adresse' : 'Adressen'}</div><div class="tscroll"><table class="t sortable"><tr><th style="width:28px"><input type="checkbox" data-act="rowAll" aria-label="Alle auswählen"></th>` +
     cols.map(([k, l]) => `<th data-act="netSort" data-k="${k}" aria-sort="${netSort.k === k ? (netSort.dir > 0 ? 'ascending' : 'descending') : 'none'}">${l}${netSort.k === k ? (netSort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('') + '</tr>' +
     (rows.map(r => { const v = vlan(r.vlan_id);
-      return `<tr class="clk" ${r.find ? 'data-act="goFinds"' : `data-act="show" data-id="${r.id}"`}><td><span class="dot ${r.status === 'pending' ? 'pending' : r.status}"></span> ${STATUS[r.status]}</td>` +
+      return `<tr class="clk" ${r.find ? 'data-act="goFinds"' : `data-act="show" data-id="${r.id}"`}><td>${r.find ? '' : `<input type="checkbox" data-act="rowSel" data-id="${r.id}"${multi.has(r.id) ? ' checked' : ''} aria-label="${esc(r.name)} auswählen">`}</td><td><span class="dot ${r.status === 'pending' ? 'pending' : r.status}"></span> ${STATUS[r.status]}</td>` +
         `<td class="mono">${esc(r.ip)}</td><td>${r.find ? '<span class="muted">– noch nicht dokumentiert –</span>' : `<b>${esc(r.name)}</b>`}</td><td class="mono">${esc(r.hostname)}</td><td>${esc(r.type)}</td>` +
         `<td class="mono">${esc(r.mac)}</td><td>${esc(r.vendor)}</td><td>${v ? `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>` : ''}</td><td>${r.seen ? 'vor ' + ago(r.seen) : ''}</td></tr>`; }).join('') ||
-      `<tr><td colspan="${cols.length}" class="muted">Keine Treffer.</td></tr>`) + '</table></div>';
+      `<tr><td colspan="${cols.length + 1}" class="muted">Keine Treffer.</td></tr>`) + '</table></div>';
 }
 function netGrid() {
   const byIp = new Map();
@@ -665,7 +706,33 @@ function netGrid() {
     '<div class="hint">Lege dein erstes Netz an (z. B. 192.168.178.0/24) und aktiviere den Auto-Scan.</div>');
   return h;
 }
-function fillNets() { const b = $('#netbody'); if (b) b.innerHTML = netMode === 'table' ? netTable() : netGrid(); }
+function wlanSection() {
+  const ws = S.wlans.filter(w => match(netQ, w.ssid, w.band, w.security, w.note, (vlan(w.vlan_id) || {}).name, (w.aps || []).map(a => (dev(a) || {}).name).join(' ')));
+  return `<div class="bar" style="margin-top:28px"><h2>WLAN</h2><button class="btn pri" data-act="newWlan">+ WLAN</button><span class="muted">${S.wlans.length} SSIDs</span></div>` +
+    (ws.length ? '<div class="cards">' + ws.map(w => { const v = vlan(w.vlan_id), aps = (w.aps || []).map(dev).filter(Boolean);
+      const clients = S.links.filter(l => l.kind === 'wlan' && l.wlan_id === w.id).length;
+      return `<div class="box net" style="--c:${esc(v ? v.color : '#5d6a7c')}"><div class="hd"><span class="tag">SSID</span><b class="mono">${esc(w.ssid)}</b><span class="sub">${esc(w.band || '')}</span></div>` +
+        `<div class="muted" style="font-size:12.5px;margin:3px 0 8px">${v ? `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>` : 'kein Netzwerk zugeordnet'}` +
+        `${w.security ? ' · ' + esc(w.security) : ''}${w.note ? ' · ' + esc(w.note) : ''}</div>` +
+        `<div style="display:flex;flex-wrap:wrap;gap:5px">${aps.map(a => `<a class="pill" href="#" data-act="show" data-id="${a.id}"><span class="dot ${a.status}" style="width:7px;height:7px;margin-right:5px"></span>${esc(a.name)}</a>`).join('') || '<span class="muted" style="font-size:12.5px">noch keinem Access Point zugeordnet</span>'}</div>` +
+        `<div class="keyrow"><span>${aps.length} Access Points · ${clients} dokumentierte WLAN-Verbindungen</span></div>` +
+        `<div class="acts" style="margin-bottom:0"><button class="btn sm" data-act="editWlan" data-id="${w.id}">Bearbeiten</button></div></div>`; }).join('') + '</div>' :
+      `<div class="hint">${S.wlans.length ? 'Keine Treffer.' : 'Lege deine SSIDs an und ordne sie einem Netzwerk und den Access Points zu. Die SSIDs erscheinen dann auf den AP-Karten in der Topologie.'}</div>`);
+}
+function wlanForm(w) {
+  const isNew = !w.id, aps = S.devices.filter(d => !['app', 'service', 'internet', 'container', 'vm', 'client'].includes(d.type))
+    .sort((a, b) => (b.type === 'ap') - (a.type === 'ap') || a.name.localeCompare(b.name)).map(d => [d.id, d.name + (d.type === 'ap' ? '' : ' (' + (TYPES[d.type] || d.type) + ')')]);
+  openForm(isNew ? 'Neues WLAN' : esc(w.ssid), [['ssid', 'SSID (Name des WLANs)'], ['vlan_id', 'Netzwerk / VLAN', 'select', vlanOpts()],
+    [['band', 'Band', 'select', [['', '–'], ...BANDS.map(b => [b, b])]], ['security', 'Verschlüsselung', 'select', [['', '–'], ...SECS.map(b => [b, b])]]],
+    ['aps', 'Ausgestrahlt von (Mehrfachauswahl)', 'multi', aps], ['note', 'Notiz (z. B. Gäste, nur IoT)']], isNew ? {aps: []} : w, async data => {
+    if (!data.ssid) throw new Error('SSID fehlt');
+    if (isNew) await api('POST', '/api/wlans', data); else await api('PUT', '/api/wlans/' + w.id, data);
+  }, isNew ? '' : `<button class="btn bad" type="button" data-act="delWlan" data-id="${w.id}">Löschen</button>`, !!sel);
+}
+function fillNets() {
+  const b = $('#netbody'); if (b) b.innerHTML = netMode === 'table' ? netTable() : netGrid();
+  const w = $('#wlanbody'); if (w) w.innerHTML = wlanSection();
+}
 function renderNets() {
   main.innerHTML = `<div class="page"><div class="bar"><h2>Netzwerke &amp; VLANs</h2><button class="btn pri" data-act="newVlan">+ Netzwerk</button>` +
     `<span class="seg"><button class="btn sm${netMode === 'grid' ? ' on' : ''}" data-act="netMode" data-m="grid">Raster</button><button class="btn sm${netMode === 'table' ? ' on' : ''}" data-act="netMode" data-m="table">Tabelle</button></span>` +
@@ -674,7 +741,7 @@ function renderNets() {
     (netMode === 'table' ? `<select class="inp" id="netv" style="width:auto" aria-label="Netzwerk filtern"><option value="">Alle Netzwerke</option>${S.vlans.map(v => `<option value="${v.id}"${String(v.id) === netVlan ? ' selected' : ''}>${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</option>`).join('')}</select>` +
       `<button class="btn" data-act="netCsv">CSV</button>` : '') + '</div>' +
     (S.scanner.privileged ? '' : '<div class="hint" style="margin-bottom:14px">Der Container läuft ohne Root-Rechte – MAC-Adressen und Hersteller werden so nicht erkannt.</div>') +
-    '<div id="netbody"></div></div>';
+    '<div id="netbody"></div><div id="wlanbody"></div></div>';
   fillNets();
   $('#netq').addEventListener('input', e => { netQ = e.target.value; fillNets(); });
   if ($('#netv')) $('#netv').addEventListener('change', e => { netVlan = e.target.value; fillNets(); });
@@ -872,6 +939,40 @@ const ACT = {
     const x = dev(+d.id), c = cards.get(topOf(x.id)); if (!c) return;
     cam.k = Math.max(cam.k, 0.75); cam.x = main.clientWidth / 2 - (c.x + c.w / 2) * cam.k; cam.y = main.clientHeight / 2 - (c.y + Math.min(c.h, 300) / 2) * cam.k;
     applyCam(); $('#tres').hidden = true; $('#topoq').value = ''; showDevice(x.id);
+  },
+  newWlan: () => wlanForm({}),
+  editWlan: d => wlanForm(wlan(+d.id)),
+  delWlan: d => { if (confirm('WLAN löschen? Geräte und Verbindungen bleiben erhalten.')) { closePanel(); run(() => api('DELETE', '/api/wlans/' + d.id)); } },
+  selMode: () => { selMode = !selMode; if (!selMode) multi.clear(); bulkBar(); renderTopo(); },
+  rowSel: d => toggleMulti(+d.id),
+  rowAll: (d, el) => { const ids = [...new Set(netFiltered().filter(r => r.id).map(r => r.id))]; for (const id of ids) if (multi.has(id) !== el.checked) toggleMulti(id); },
+  bulkClear: () => { multi.clear(); selMode = false; bulkBar(); render(); },
+  bulkDel: () => {
+    const ids = [...multi], kids = ids.reduce((a, id) => a + kidsOf(id).filter(k => !multi.has(k.id)).length, 0);
+    if (!confirm(`${ids.length} Geräte${kids ? ` samt ${kids} enthaltenen Einträgen` : ''} löschen?`)) return;
+    closePanel(); multi.clear();
+    run(async () => { for (const id of ids) if (dev(id)) await api('DELETE', '/api/devices/' + id).catch(() => {}); }, 'Gelöscht');
+  },
+  bulkEdit: () => {
+    const ids = [...multi], keep = [['', '– unverändert –']];
+    openForm(`${ids.length} Geräte ändern`, [
+      [['type', 'Typ', 'select', [...keep, ...Object.entries(TYPES)]], ['vlan_id', 'Netzwerk', 'select', [...keep, ['none', '– keins –'], ...S.vlans.map(v => [v.id, v.vid != null ? `${vtag(v)} · ${v.name}` : v.name])]]],
+      ['parent_id', 'Läuft auf / gehört zu', 'select', [...keep, ['none', '– eigenständig –'], ...S.devices.filter(d => !multi.has(d.id) && !['app', 'service'].includes(d.type)).map(d => [d.id, d.name])]],
+      [['model', 'Modell (leer = unverändert)'], ['os', 'System (leer = unverändert)']], ['icon', 'Icon (leer = unverändert)'], ['note', 'Notiz (leer = unverändert)'],
+    ], {}, async data => {
+      const patch = {};
+      for (const [k, v] of Object.entries(data)) if (v !== '') patch[k] = v === 'none' ? '' : v;
+      if (!Object.keys(patch).length) throw new Error('Nichts zum Ändern ausgewählt');
+      let fail = 0;
+      for (const id of ids) await api('PUT', '/api/devices/' + id, patch).catch(() => { fail++; });
+      if (fail) throw new Error(`${fail} von ${ids.length} Geräten ließen sich nicht ändern`);
+    }, `<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">${ids.slice(0, 8).map(id => esc(dev(id).name)).join(', ')}${ids.length > 8 ? ' …' : ''}</p>`);
+  },
+  bulkMerge: () => {
+    const ids = [...multi];
+    openForm(`${ids.length} Geräte zusammenführen`, [['target', 'Dieses Gerät bleibt bestehen', 'select', ids.map(id => [id, dev(id).name + (dev(id).ip ? ' · ' + dev(id).ip : '')])]], {},
+      async data => { for (const id of ids) if (id !== +data.target) await api('POST', `/api/devices/${data.target}/merge`, {other_id: id}); multi.clear(); },
+      '<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">Die anderen Einträge gehen in diesem auf: Ihre Adressen werden zu weiteren Adressen, Kabel und enthaltene Geräte wandern mit. Das lässt sich nicht rückgängig machen.</p>');
   },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
