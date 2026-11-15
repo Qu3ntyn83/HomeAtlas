@@ -96,6 +96,12 @@ Unter *Netzwerke → WLAN* legst du SSIDs an: Name, Netzwerk/VLAN, Band, Verschl
 Die SSIDs erscheinen als Pillen auf den AP-Karten. Funkverbindungen zeichnest du als Verbindung der Art **WLAN** (gepunktet, in der
 Farbe des zugehörigen VLANs, beschriftet mit der SSID). SSIDs und WLAN-Clients werden von Hand gepflegt; einen UniFi-Abgleich gibt es noch nicht.
 
+## Notizen am Gerät
+
+Neben der einzeiligen Kurzbeschreibung hat jedes Gerät ein mehrzeiliges Feld **Notizen**. Im Gerät blendet ein Knopf die Notizen auf der
+Karte ein oder aus: eingeblendet erscheinen sie als Notizzettel auf der Karte (bis zu sechs Zeilen), bei VMs und Containern als eine
+Zeile im Chip. Ausgeblendet bleiben sie im Gerät lesbar.
+
 ## Räume
 
 Jedes Gerät hat ein Feld **Raum** (mit Vorschlagsliste der schon verwendeten Räume; auch über die Sammeländerung setzbar). In der
