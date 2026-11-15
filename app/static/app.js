@@ -95,6 +95,7 @@ async function load(silent) {
   document.body.classList.toggle('ro', S.role === 'read');
   document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
   $('#badge').textContent = S.discoveries.filter(d => d.state === 'pending').length || '';
+  $('#mbadge').textContent = S.checks.filter(isProblem).length || '';
   $('#scanstate').textContent = S.scanner.running ? `Scan ${S.scanner.running} · ${S.scanner.phase}` : '';
   for (const id of [...multi]) if (!dev(id)) multi.delete(id);
   bulkBar();
@@ -104,7 +105,7 @@ async function load(silent) {
 }
 function render() {
   main.className = view === 'topo' ? 'canvas' : '';
-  ({topo: renderTopo, racks: renderRacks, nets: renderNets, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
+  ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
 }
 $('#tabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
@@ -130,7 +131,11 @@ function T(x, y, s, o = {}) {
     `font-weight="${o.weight || 400}" text-anchor="${o.anchor || 'start'}"${o.mono ? ' class="m"' : ''}>${esc(s)}</text>`;
 }
 const IMG = (name, x, y, s) => `<image href="/api/icon/${encodeURIComponent(name)}" x="${x}" y="${y}" width="${s}" height="${s}"/>`;
-const statusDot = (d, x, y, r = 4.5) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${d.status === 'online' ? PAL.OK : d.status === 'offline' ? PAL.BAD : PAL.FAINT}"/>`;
+// Problem = war schon einmal erreichbar und fällt jetzt aus; „nie erreichbar“ ist ein falsches Ziel, kein Ausfall
+const isProblem = c => c.enabled && c.status === 'down' && !!c.ever_up;
+const isNever = c => c.enabled && c.status === 'down' && !c.ever_up;
+const degraded = d => d.status === 'online' && S.checks.some(c => c.device_id === d.id && isProblem(c));
+const statusDot = (d, x, y, r = 4.5) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${degraded(d) ? '#e3b341' : d.status === 'online' ? PAL.OK : d.status === 'offline' ? PAL.BAD : PAL.FAINT}"/>`;
 
 // ------------------------------------------------------------ Topologie: Karten
 // Notizen auf der Karte: Text auf die Breite umbrechen, höchstens `max` Zeilen
@@ -605,6 +610,13 @@ function showDevice(id, keep) {
         `<button class="btn sm pri" data-act="newInteg" data-kind="${esc(s.connector)}" data-dev="${id}" data-sug="${n}">Einrichten</button>`) :
         '<span class="pill">Hinweis · noch kein Connector</span>') + '</div>';
   }).join('');
+  { const cs = S.checks.filter(c => c.device_id === id);
+    if (cs.length || (d.ip || d.url)) h += `<h3>Überwachung${cs.length ? ` (${cs.filter(c => c.status === 'up').length}/${cs.length} in Ordnung)` : ''}</h3>` +
+      cs.map(c => `<div class="rowl" style="flex-wrap:wrap"><span class="dot ${c.enabled && !isNever(c) ? MONDOT[c.status] : ''}"></span><b>${esc(c.name)}</b>` +
+        `<span class="muted" style="font-size:12px">${!c.enabled ? 'pausiert' : isNever(c) ? 'noch nie erreichbar' : c.status === 'down' ? 'ausgefallen seit ' + ago(c.since) : c.status === 'up' ? (c.last_ms != null ? Math.round(c.last_ms) + ' ms' : 'ok') : 'noch kein Ergebnis'}</span>` +
+        `<button class="btn sm" style="margin-left:auto" data-act="editCheck" data-id="${c.id}" aria-label="Check bearbeiten">✎</button>` +
+        (c.status === 'down' && c.last_error ? `<span class="faint" style="flex-basis:100%;font-size:12px;padding-left:17px">${esc(c.last_error)}</span>` : '') + '</div>').join('') +
+      `<div class="acts"><button class="btn sm" data-act="newCheck" data-dev="${id}">+ Check</button></div>`; }
   if (integ.length) h += '<h3>Anbindungen</h3>' + integ.map(i => `<div class="rowl"><b>${esc(S.kinds[i.kind].label)}</b><span class="muted">${esc(i.last_status || 'noch nicht synchronisiert')}</span>` +
     `<button class="btn sm" style="margin-left:auto" data-act="sync" data-id="${i.id}">Sync</button></div>`).join('');
   if (links.length) h += '<h3>Verbindungen</h3>' + links.map(l => {
@@ -938,6 +950,83 @@ function renderFinds() {
   $('#findq').addEventListener('input', e => { findQ = e.target.value; $('#findbody').innerHTML = body(); });
 }
 
+// ------------------------------------------------------------ Überwachung
+const MONDOT = {up: 'online', down: 'offline', unknown: ''};
+const KINDS_CHECK = {ping: 'Ping', tcp: 'TCP-Port', http: 'HTTP'};
+let MON = null, monQ = '', monOpen = new Set();
+function monBars(c) {
+  const pad = Array(Math.max(0, 30 - c.last30.length)).fill(null), n = c.last30.length, bad = c.last30.filter(x => !x).length;
+  return `<span class="bars" role="img" aria-label="${n ? `${n - bad} von ${n} letzten Prüfungen erfolgreich` : 'noch keine Prüfung'}">` +
+    [...pad, ...c.last30].map(x => `<i class="${x == null ? '' : x ? 'ok' : 'bad'}"></i>`).join('') + '</span>';
+}
+function monRow(c) {
+  const pct = c.up24 == null ? '' : (c.up24 === 100 ? '100' : c.up24.toFixed(1)) + ' %';
+  return `<div class="mrow${c.enabled ? '' : ' paused'}" data-act="editCheck" data-id="${c.id}"><span class="dot ${c.enabled && !isNever(c) ? MONDOT[c.status] : ''}"></span>` +
+    `<span class="mname"><b>${esc(c.device || c.name)}</b>${c.device ? ` <span class="muted">${esc(c.name)}</span>` : ''}</span>${monBars(c)}` +
+    `<span class="mms mono">${!c.enabled ? 'Pause' : c.status === 'up' && c.last_ms != null ? Math.round(c.last_ms) + ' ms' : isNever(c) ? 'nie' : c.status === 'down' ? 'aus' : '–'}</span><span class="mpct mono" title="Verfügbarkeit in den letzten 24 Stunden">${pct}</span></div>`;
+}
+function monBody() {
+  if (!MON) return '<div class="hint">lädt …</div>';
+  const all = MON.checks, on = all.filter(c => c.enabled), down = on.filter(isProblem), never = on.filter(isNever), wait = on.filter(c => c.status === 'unknown');
+  if (!all.length) return `<div class="hint"><b>Noch keine Überwachung.</b><br>LabVis kann aus der Dokumentation Checks ableiten: einen Ping je Gerät mit IP, ` +
+    `einen Port-Check je bekanntem Dienst (SSH, Proxmox, SMB …) und einen HTTP-Check je Weboberfläche.` +
+    `<div class="acts"><button class="btn pri" data-act="genChecks">Aus Dokumentation erzeugen</button><button class="btn" data-act="newCheck">+ Check von Hand</button></div></div>`;
+  const f = c => match(monQ, c.device, c.name, c.target, c.port, KINDS_CHECK[c.kind], MON.areas[c.area], c.status === 'down' ? 'ausgefallen problem' : '');
+  let h = `<div class="mbanner ${down.length ? 'bad' : 'ok'}"><span class="dot ${down.length ? 'offline' : 'online'}"></span><b>${down.length ? `${down.length} ${down.length === 1 ? 'Problem' : 'Probleme'}` : 'Alles in Ordnung'}</b>` +
+    `<span class="muted">${on.length - down.length - never.length - wait.length} von ${on.length} Checks in Ordnung${wait.length ? ` · ${wait.length} noch ohne Ergebnis` : ''}${all.length - on.length ? ` · ${all.length - on.length} pausiert` : ''}` +
+    ` · Benachrichtigung ${MON.notify ? 'aktiv' : 'aus'}</span></div>` +
+    (never.length ? `<div class="hint" style="margin:8px 0 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span><b>${never.length} ${never.length === 1 ? 'Check war' : 'Checks waren'} noch nie erreichbar.</b> Das ist meist ein falsches Ziel oder ein Dienst, den es dort nicht gibt – kein Ausfall, deshalb auch keine Meldung.</span>` +
+      `<button class="btn sm" data-act="delNever">Diese ${never.length} entfernen</button></div>` : '');
+  if (down.filter(f).length) h += `<h3 class="faint">Was ist los</h3><div class="box mprob">` + down.filter(f).sort((a, b) => (a.since || 0) - (b.since || 0)).map(c =>
+    `<div class="mrow" data-act="${c.device_id ? 'show' : 'editCheck'}" data-id="${c.device_id || c.id}"><span class="dot offline"></span><span class="mname"><b>${esc(c.device || c.name)}</b>` +
+    `${c.device ? ` <span class="muted">${esc(c.name)}</span>` : ''}<br><span class="faint" style="font-size:12px">${esc(c.last_error || 'ausgefallen')}</span></span>` +
+    `<span class="mms" style="width:auto;color:#ffb4ae">seit ${ago(c.since)}</span></div>`).join('') + '</div>';
+  h += '<h3 class="faint">Bereiche</h3><div class="cards">';
+  for (const [key, name] of Object.entries(MON.areas)) {
+    const cs = all.filter(c => c.area === key), act = cs.filter(c => c.enabled && !isNever(c)), bad = act.filter(isProblem).length, known = act.filter(c => c.status !== 'unknown').length;
+    if (!cs.length) continue;
+    const shown = cs.filter(f).sort((a, b) => isProblem(b) - isProblem(a) || isNever(a) - isNever(b) || String(a.device).localeCompare(String(b.device)) || a.id - b.id);
+    if (monQ.trim() && !shown.length) continue;
+    const st = !known ? ['', 'noch keine Ergebnisse'] : !bad ? ['online', 'in Ordnung'] : bad === act.length ? ['offline', 'ausgefallen'] : ['warn', 'beeinträchtigt'];
+    const open = monOpen.has(key) || monQ.trim() || shown.length <= 8, list = open ? shown : shown.slice(0, Math.max(6, bad));
+    h += `<div class="box marea"><div class="mhead"><span class="dot ${st[0]}"></span><b>${esc(name)}</b><span class="muted">${st[1]}</span><span class="mono muted" style="margin-left:auto">${act.length - bad}/${act.length}</span></div>` +
+      list.map(monRow).join('') + (shown.length > list.length ? `<button class="btn sm" style="margin-top:8px" data-act="monArea" data-k="${key}">alle ${shown.length} anzeigen</button>` : '') + '</div>';
+  }
+  h += '</div><h3 class="faint" style="margin-top:26px">Diese Woche</h3>';
+  if (!MON.events.length) h += '<div class="hint">Keine Ausfälle in den letzten sieben Tagen.</div>';
+  else {
+    const day = t => new Date(t * 1000).toLocaleDateString('de-DE', {weekday: 'long', day: 'numeric', month: 'long'});
+    let last = '';
+    h += '<div class="box">' + MON.events.map(e => { const d = day(e.ts), head = d !== last ? `<div class="mday">${d}</div>` : ''; last = d;
+      return head + `<div class="rowl"><span class="dot ${e.kind === 'up' ? 'online' : 'offline'}"></span><span class="mono muted" style="font-size:12px">${new Date(e.ts * 1000).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>` +
+        `${e.device_id && dev(e.device_id) ? `<a href="#" data-act="show" data-id="${e.device_id}">${esc(e.text)}</a>` : esc(e.text)}</div>`; }).join('') + '</div>';
+  }
+  return h;
+}
+async function renderMonitor() {
+  if (!$('#monbody')) {
+    main.innerHTML = `<div class="page"><div class="bar"><h2>Überwachung</h2><button class="btn pri" data-act="genChecks">Aus Dokumentation erzeugen</button>` +
+      `<button class="btn" data-act="newCheck">+ Check</button><a class="btn" href="/api/monitor/gatus.yaml" download title="Die Checks als Konfiguration für Gatus">Gatus-Export</a></div>` +
+      `<div class="bar">${searchBox('monq', monQ, 'Suchen: Gerät, Check, Bereich …')}</div><div id="monbody">${monBody()}</div></div>`;
+    $('#monq').addEventListener('input', e => { monQ = e.target.value; $('#monbody').innerHTML = monBody(); });
+  }
+  try { MON = await api('GET', '/api/monitor/overview'); } catch (e) { return; }
+  if (view === 'monitor' && $('#monbody')) $('#monbody').innerHTML = monBody();
+}
+function checkForm(c) {
+  const isNew = !c.id;
+  openForm(isNew ? 'Neuer Check' : esc((c.device ? c.device + ' · ' : '') + c.name), [
+    ['device_id', 'Gehört zu Gerät', 'select', devOpts()], ['kind', 'Prüfart', 'select', Object.entries(KINDS_CHECK)],
+    ['target', 'Ziel (IP, Hostname oder bei HTTP die ganze Adresse)'], ['port', 'Port', 'number'], ['name', 'Bezeichnung (leer = automatisch)'],
+    ['interval_s', 'Intervall in Sekunden (mindestens 15)', 'number'], ['enabled', 'Aktiv (abgewählt = pausiert)', 'check'],
+  ], c, async data => { if (isNew) await api('POST', '/api/monitor/checks', data); else await api('PUT', '/api/monitor/checks/' + c.id, data); MON = null; },
+  isNew ? '' : `<button class="btn" type="button" data-act="runCheck" data-id="${c.id}">Jetzt prüfen</button><button class="btn bad" type="button" data-act="delCheck" data-id="${c.id}">Löschen</button>` +
+    (c.status === 'down' && c.last_error ? `<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">Letzter Fehler: ${esc(c.last_error)}</p>` : ''), !!sel);
+  const f = n => $(`[name=${n}]`, panel), sync = () => { f('port').closest('label').hidden = f('kind').value !== 'tcp'; };
+  f('kind').addEventListener('change', sync); sync();
+  f('device_id').addEventListener('change', () => { const d = dev(+f('device_id').value); if (d && !f('target').value) f('target').value = f('kind').value === 'http' ? (d.url || '') : (d.ip || d.hostname || ''); });
+}
+
 // ------------------------------------------------------------ Anbindungen
 function renderInteg() {
   const open = [];
@@ -1020,7 +1109,8 @@ function renderSystem() {
     `<label>Titel<input name="title" value="${esc(s.title)}"></label><div class="two"><label>Scan-Intervall (Minuten)<input name="scan_interval_min" type="number" min="5" value="${esc(s.scan_interval_min)}"></label>` +
     `<label>Sync-Intervall der Anbindungen (Minuten)<input name="sync_interval_min" type="number" min="1" value="${esc(s.sync_interval_min)}"></label></div>` +
     `<label>SNMP-Community für den Scan<input name="snmp_community" value="${esc(s.snmp_community)}"></label>` +
-    `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button></div></form></div>` +
+    `<label>Benachrichtigung bei Ausfall: ntfy-Adresse oder Webhook (leer = aus)<input name="notify_url" value="${esc(s.notify_url || '')}" placeholder="https://ntfy.sh/mein-thema" autocomplete="off"></label>` +
+    `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button><button class="btn" type="button" data-act="testNotify">Testmeldung senden</button></div></form></div>` +
     `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><div class="acts" style="margin:0"><a class="btn" href="/api/export" download>Export (JSON)</a>` +
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
     `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>`;
@@ -1177,6 +1267,23 @@ const ACT = {
     const f = n => $(`[name=${n}]`, panel), sync = () => { f('gname').closest('label').hidden = f('target').value !== 'new'; };
     f('target').addEventListener('change', sync); sync();
   },
+  delNever: () => { if (confirm('Alle Checks entfernen, die noch nie erreichbar waren?')) { MON = null; run(async () => { const r = await api('DELETE', '/api/monitor/never'); setTimeout(() => toast(`${r.removed} Checks entfernt`), 50); }); } },
+  monArea: d => { monOpen.add(d.k); $('#monbody').innerHTML = monBody(); },
+  newCheck: d => { const x = d.dev ? dev(+d.dev) : null; checkForm({device_id: x ? x.id : '', kind: 'ping', target: x ? (x.ip || x.hostname || '') : '', interval_s: 60, enabled: 1}); },
+  editCheck: d => { const c = (MON && MON.checks.find(x => x.id === +d.id)) || S.checks.find(x => x.id === +d.id); if (c) checkForm({...c, device: (dev(c.device_id) || {}).name}); },
+  delCheck: d => { if (confirm('Check samt Verlauf löschen?')) { closePanel(); MON = null; run(() => api('DELETE', '/api/monitor/checks/' + d.id)); } },
+  runCheck: async d => { try { toast('Prüfe …'); const r = await api('POST', `/api/monitor/checks/${d.id}/run`); toast(r.last_error ? 'Fehlgeschlagen: ' + r.last_error : `In Ordnung${r.last_ms != null ? ' · ' + Math.round(r.last_ms) + ' ms' : ''}`, !!r.last_error); load(true); } catch (e) { toast(e.message, true); } },
+  genChecks: async () => {
+    let p; try { p = await api('GET', '/api/monitor/plan'); } catch (e) { return toast(e.message, true); }
+    const total = Object.values(p.new).reduce((a, b) => a + b, 0);
+    if (!total) return toast('Für alle dokumentierten Geräte gibt es schon Checks');
+    const on = new Set(['network', 'servers', 'storage', 'apps']);
+    openForm('Checks aus der Dokumentation', Object.entries(p.areas).filter(([k]) => p.new[k]).map(([k, n]) => ['a_' + k, `${n} · ${p.new[k]} ${p.new[k] === 1 ? 'neuer Check' : 'neue Checks'}`, 'check']),
+      Object.fromEntries(Object.keys(p.areas).map(k => ['a_' + k, on.has(k) ? 1 : 0])),
+      async data => { const areas = Object.keys(data).filter(k => data[k]).map(k => k.slice(2)); const r = await api('POST', '/api/monitor/generate', {areas}); MON = null; setTimeout(() => toast(`${r.created} Checks angelegt – erste Ergebnisse in wenigen Sekunden`), 50); },
+      '<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">Je Gerät mit IP ein Ping, je bekanntem Dienst-Port ein Port-Check, je Weboberfläche ein HTTP-Check. Vorhandene Checks bleiben unverändert; Clients und Rack-Platzhalter werden nie überwacht.</p>');
+  },
+  testNotify: async () => { try { await api('POST', '/api/monitor/test-notify'); toast('Testmeldung gesendet'); } catch (e) { toast(e.message, true); } },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
@@ -1236,7 +1343,7 @@ const ACT = {
     a.download = 'homelab.svg'; a.click();
   },
 };
-const READ_OK = new Set(['viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
+const READ_OK = new Set(['monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {

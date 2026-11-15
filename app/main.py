@@ -11,14 +11,14 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, connectors, db, importer, scanner
+from . import auth, connectors, db, importer, monitor, scanner
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 
 def _build_id():
@@ -57,6 +57,7 @@ SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if
 app = FastAPI(title="LabVis", docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.middleware("http")(auth.middleware)
 app.include_router(auth.router)
+app.include_router(monitor.router)
 
 
 def _scheduler():
@@ -73,9 +74,11 @@ def _scheduler():
 def startup():
     db.init()
     auth.bootstrap()
+    monitor.init()
     ICON_CACHE.mkdir(parents=True, exist_ok=True)
     if not os.environ.get("LABVIS_NO_SCHEDULER"):
         threading.Thread(target=_scheduler, daemon=True).start()
+        monitor.start()
 
 
 def _mask(i):
@@ -91,12 +94,13 @@ def state(request: Request):
         "build": BUILD,
         "user": request.state.user["username"],
         "role": request.state.user["role"],
-        "settings": db.settings(),
+        "settings": {k: v for k, v in db.settings().items() if k != "notify_url" or request.state.user["role"] == "admin"},
         "vlans": db.q("SELECT * FROM vlans ORDER BY vid IS NULL, vid, id"),
         "racks": db.q("SELECT * FROM racks ORDER BY id"),
         "devices": db.q("SELECT * FROM devices ORDER BY id"),
         "links": db.q("SELECT * FROM links ORDER BY id"),
         "wlans": db.q("SELECT * FROM wlans ORDER BY ssid COLLATE NOCASE"),
+        "checks": monitor.light(),
         "discoveries": db.q("SELECT * FROM discoveries ORDER BY state='ignored', last_seen DESC"),
         "integrations": [_mask(i) for i in db.q("SELECT * FROM integrations ORDER BY id")],
         "scans": db.q("SELECT * FROM scans ORDER BY id DESC LIMIT 15"),
@@ -427,6 +431,7 @@ async def import_inventory(request: Request):
 def export():
     data = {t: db.q(f"SELECT * FROM {t}") for t in TABLES}
     data["settings"] = db.settings()
+    data["checks"] = db.q("SELECT id, " + ", ".join(monitor.FIELDS) + ", source FROM checks")
     return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="labvis-export.json"'})
 
 
@@ -442,6 +447,11 @@ def restore(data: dict = Body(...)):
                 c.execute(f"INSERT INTO {t}({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                           [db._enc(row[k]) for k in cols])
         c.execute("DELETE FROM discoveries")
+        for t in ("checks", "check_results", "check_hours", "check_events"):     # Verlauf gehört zur alten Installation
+            c.execute(f"DELETE FROM {t}")
+        for row in data.get("checks", []):
+            cols = [k for k in row if k in ("id", "source", *monitor.FIELDS)]
+            c.execute(f"INSERT INTO checks({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [row[k] for k in cols])
     save_settings(data.get("settings", {}))
     return {"ok": True}
 

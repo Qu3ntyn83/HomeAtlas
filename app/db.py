@@ -59,7 +59,7 @@ COLUMNS = {
     "integrations": ["kind", "name", "device_id", "config", "enabled"],
 }
 DEFAULTS = {"scan_interval_min": "60", "sync_interval_min": "15", "snmp_community": "public",
-            "title": "LabVis"}
+            "title": "LabVis", "notify_url": ""}
 
 
 def conn():
@@ -146,6 +146,10 @@ def delete_device(did):
     for ch in q("SELECT id FROM devices WHERE parent_id=?", (did,)):
         delete_device(ch["id"])
     x("DELETE FROM links WHERE a_id=? OR b_id=?", (did, did))
+    for c in q("SELECT id FROM checks WHERE device_id=?", (did,)):      # Checks samt Verlauf des Geräts
+        for t in ("check_results", "check_hours", "check_events"):
+            x(f"DELETE FROM {t} WHERE check_id=?", (c["id"],))
+    x("DELETE FROM checks WHERE device_id=?", (did,))
     x("UPDATE integrations SET device_id=NULL WHERE device_id=?", (did,))
     for w in q("SELECT id, aps FROM wlans"):
         if did in (w["aps"] or []):
