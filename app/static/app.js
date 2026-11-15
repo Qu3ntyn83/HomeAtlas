@@ -133,9 +133,25 @@ const IMG = (name, x, y, s) => `<image href="/api/icon/${encodeURIComponent(name
 const statusDot = (d, x, y, r = 4.5) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${d.status === 'online' ? PAL.OK : d.status === 'offline' ? PAL.BAD : PAL.FAINT}"/>`;
 
 // ------------------------------------------------------------ Topologie: Karten
+// Notizen auf der Karte: Text auf die Breite umbrechen, höchstens `max` Zeilen
+const memoOn = d => !!(d.memo_show && (d.memo || '').trim());
+function wrapText(text, width, size, max) {
+  const out = [];
+  for (const para of String(text).split(/\r?\n/)) {
+    let line = '';
+    for (const word of para.split(/\s+/).filter(Boolean)) {
+      const t = line ? line + ' ' + word : word;
+      if (tw(t, size) <= width || !line) line = t; else { out.push(line); line = word; }
+    }
+    out.push(line);
+  }
+  while (out.length && !out[out.length - 1]) out.pop();
+  if (out.length > max) { out.length = max; out[max - 1] = fit(out[max - 1] + ' …', width, size); if (!out[max - 1].endsWith('…')) out[max - 1] += ' …'; }
+  return out.map(l => fit(l, width, size));
+}
 function chipH(c) {
   const g = kidsOf(c.id).length;
-  return (c.ip || c.hostname ? 60 : 46) + (g ? g * 19 + 8 : 0);
+  return (c.ip || c.hostname ? 60 : 46) + (memoOn(c) ? 15 : 0) + (g ? g * 19 + 8 : 0);
 }
 function chipSvg(c, x, y, w, parentVlan) {
   const h = chipH(c), col = vcol(c.vlan_id), gk = kidsOf(c.id);
@@ -154,8 +170,10 @@ function chipSvg(c, x, y, w, parentVlan) {
     const a = c.url && c.hostname ? c.hostname : [c.ip, addrsOf(c).length ? '+' + addrsOf(c).length : '', c.hostname].filter(Boolean).join(' · ');
     s += T(40, 51, fit(a, w - 50, 11, 400, true), {size: 11, mono: true, fill: c.url && c.hostname ? PAL.LINK : col});
   }
+  const my = c.ip || c.hostname ? 62 : 48;
+  if (memoOn(c)) s += T(40, my + 5, fit('✎ ' + c.memo.trim().split(/\r?\n/)[0], w - 50, 10.5), {size: 10.5, fill: '#d9c58a'});
   gk.forEach((g, i) => {
-    const gy = (c.ip || c.hostname ? 62 : 48) + i * 19;
+    const gy = my + (memoOn(c) ? 15 : 0) + i * 19;
     const right = g.hostname || g.note || '';
     const nameW = Math.min(tw(g.name, 12, 500), w * 0.5);
     s += IMG(g.icon || 'type-' + g.type, 13, gy, 14) + T(34, gy + 11, fit(g.name, w * 0.5, 12, 500), {size: 12, weight: 500}) +
@@ -197,7 +215,7 @@ function buildCard(d) {
   if (!n && hw.length) cols = Math.min(hw.length, 2);
   let cw = 240;
   const has = n || hw.length;
-  const w = Math.ceil(Math.max(tabW + 60, headW, has ? cols * cw + (cols - 1) * GAP + 2 * PAD : 0));
+  const w = Math.ceil(Math.max(tabW + 60, headW, memoOn(d) ? 320 : 0, has ? cols * cw + (cols - 1) * GAP + 2 * PAD : 0));
   cw = (w - 2 * PAD - (cols - 1) * GAP) / cols;
   let s = T(16, 21, d.name, {size: 19, weight: 700}) + T(16 + tw(d.name, 19, 700), 21, '\u00a0·\u00a0' + type, {size: 13, weight: 500, fill: PAL.MUTED});
   s += IMG(d.icon || 'type-' + d.type, 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20));
@@ -215,6 +233,13 @@ function buildCard(d) {
       px += pw + 6;
     }
     y += 30;
+  }
+  if (memoOn(d)) {          // Notizzettel unter dem Kopf
+    const lines = wrapText(d.memo, w - 2 * PAD - 20, 11.5, 6), bh = lines.length * 15 + 12;
+    s += `<rect x="${PAD}" y="${y - 2}" width="${w - 2 * PAD}" height="${bh}" rx="6" fill="#1d1a10" stroke="#5c5230"/>` +
+      `<rect x="${PAD}" y="${y - 2}" width="3.5" height="${bh}" rx="1.7" fill="#d9c58a"/>` +
+      lines.map((l, i) => T(PAD + 12, y + 13 + i * 15, l, {size: 11.5, fill: '#e6dcb8'})).join('');
+    y += bh + 8;
   }
   if (hw.length) {
     hw.forEach((t, i) => {
@@ -234,7 +259,7 @@ function buildCard(d) {
     for (const c of b.chips) { s += chipSvg(c, bx, colY[ci], cw, d.vlan_id); colY[ci] += chipH(c) + 8; }
     if (b.title) colY[ci] += 6;
   }
-  const h = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : TAB + 78 + (ssids.length ? 32 : 0));
+  const h = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
   s = folder(w, h, tabW, stroke, grp) + s;
   return {id: d.id, d, w, h, tabW, x: d.x, y: d.y, svg: s};
 }
@@ -421,7 +446,7 @@ function renderTopo() {
   focusSel();
   $('#topoq').addEventListener('input', e => {
     const q = e.target.value, box = $('#tres');
-    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => a.ip).join(' '))).slice(0, 10) : [];
+    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => [a.ip, a.label, a.note].join(' ')).join(' '))).slice(0, 10) : [];
     box.hidden = !q.trim();
     box.innerHTML = hits.map(d => `<button data-act="jump" data-id="${d.id}"><img src="${icon(d)}" width="18" height="18" alt=""><b>${esc(d.name)}</b><span class="mono">${esc(d.ip || '')}</span></button>`).join('') ||
       '<span class="muted" style="padding:8px 10px;display:block">Keine Treffer</span>';
@@ -530,16 +555,28 @@ function showDevice(id, keep) {
     fact('MAC', d.mac && `<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) +
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
     fact('Raum', roomOf(d) !== NOROOM && esc(roomOf(d)) + (d.room ? '' : ' <span class="faint">(übernommen)</span>')) +
-    fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Notiz', esc(d.note)) +
+    fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Beschreibung', esc(d.note)) +
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
     fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
     fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>';
-  if (addrsOf(d).length) h += `<h3>Weitere Adressen (${addrsOf(d).length})</h3>` + addrsOf(d).map((a, n) => { const av = vlan(a.vlan_id);
-    return `<div class="rowl" style="flex-wrap:wrap"><span class="dot ${a.up === true ? 'online' : a.up === false ? 'offline' : ''}"></span><span class="mono">${esc(a.ip || '–')}</span>` +
-      `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
-      `<button class="btn sm" style="margin-left:auto" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button>` +
-      `${a.mac ? `<span class="mono faint" style="flex-basis:100%;font-size:11.5px;padding-left:17px">${esc(a.mac)}${a.vendor ? ' · ' + esc(a.vendor) : ''}</span>` : ''}</div>`; }).join('');
+  h += `<h3>Notizen</h3>` + ((d.memo || '').trim() ? `<div class="memo">${esc(d.memo.trim())}</div>` : '<span class="muted" style="font-size:13px">keine</span>') +
+    `<div class="acts"><button class="btn sm" data-act="editMemo" data-id="${id}">${(d.memo || '').trim() ? 'Bearbeiten' : 'Notiz schreiben'}</button>` +
+    ((d.memo || '').trim() ? `<button class="btn sm" data-act="memoToggle" data-id="${id}" aria-pressed="${d.memo_show ? 'true' : 'false'}">${d.memo_show ? 'Auf der Karte ausblenden' : 'Auf der Karte einblenden'}</button>` : '') + '</div>';
+  if (addrsOf(d).length) {
+    const sub = t => `<span class="faint" style="flex-basis:100%;font-size:12px;padding-left:17px">${t}</span>`;
+    h += `<h3>Adressen (${addrsOf(d).length + 1})</h3><div class="rowl" style="flex-wrap:wrap"><span class="dot ${m.up0 === true ? 'online' : m.up0 === false ? 'offline' : d.status}"></span>` +
+      `<span class="mono">${esc(d.ip || '–')}</span>${m.primary_label ? `<b>${esc(m.primary_label)}</b>` : ''}<span style="margin-left:auto;display:flex;gap:4px;align-items:center"><span class="pill" style="color:var(--text)">Hauptadresse</span>` +
+      `<button class="btn sm" data-act="editPrimary" data-id="${id}" aria-label="Bezeichnung und Notiz der Hauptadresse bearbeiten">✎</button></span>` +
+      (d.mac ? sub(`<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) : '') + (m.primary_note ? sub(esc(m.primary_note)) : '') + '</div>' +
+      addrsOf(d).map((a, n) => { const av = vlan(a.vlan_id);
+        return `<div class="rowl" style="flex-wrap:wrap"><span class="dot ${a.up === true ? 'online' : a.up === false ? 'offline' : ''}"></span><span class="mono">${esc(a.ip || '–')}</span>` +
+          `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
+          `<span style="margin-left:auto;display:flex;gap:4px"><button class="btn sm" data-act="addrPrimary" data-id="${id}" data-idx="${n}" title="Zur Hauptadresse machen">Als Hauptadresse</button>` +
+          `<button class="btn sm" data-act="editAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse bearbeiten">✎</button>` +
+          `<button class="btn sm" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button></span>` +
+          (a.mac ? sub(`<span class="mono">${esc(a.mac)}</span>${a.vendor ? ' · ' + esc(a.vendor) : ''}`) : '') + (a.note ? sub(esc(a.note)) : '') + '</div>'; }).join('');
+  }
   if (d.type === 'shelf') h += `<h3>Auf diesem Boden (${onShelf(id).length})</h3>` + (onShelf(id).map(x => `<div class="rowl"><img src="${icon(x)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${x.id}">${esc(x.name)}</a>` +
     `<button class="btn sm" style="margin-left:auto" data-act="shelfRemove" data-id="${x.id}" aria-label="Vom Boden nehmen">✕</button></div>`).join('') || '<span class="muted">leer</span>') +
     `<div class="acts"><button class="btn sm pri" data-act="shelfAdd" data-id="${id}">Gerät daraufstellen</button></div>`;
@@ -619,6 +656,7 @@ function openForm(title, fields, val, onSave, extra, keepSel) {
   if (ro()) return;
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
+  if ($('[name=memo]', panel)) $('[name=memo]', panel).rows = 6;
   if ($('[name=icon]', panel)) iconHelp($('[name=icon]', panel));
   if ($('[name=room]', panel)) {   // vorhandene Räume als Vorschlagsliste
     $('[name=room]', panel).setAttribute('list', 'roomlist');
@@ -639,7 +677,8 @@ function deviceForm(d) {
     ['name', 'Name'], [['type', 'Typ', 'select', Object.entries(TYPES)], ['vlan_id', 'Netzwerk', 'select', vlanOpts()]],
     [['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']], [['hostname', 'Hostname'], ['url', 'Web-URL']],
     [['model', 'Modell'], ['os', 'System']], ['room', 'Raum', 'text', 'z. B. Wohnzimmer, Keller'], ['icon', 'Icon'],
-    ['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['note', 'Notiz', 'area'],
+    ['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['note', 'Kurzbeschreibung (eine Zeile auf der Karte)'],
+    ['memo', 'Notizen', 'area'], ['memo_show', 'Notizen auf der Karte anzeigen', 'check'],
     [['rack_id', 'Rack', 'select', [['', '– keins –'], ...S.racks.map(r => [r.id, r.name])]], ['rack_u', 'unterste HE', 'number']],
     ['rack_height', 'Höhe in HE', 'number'],
   ], d, async data => {
@@ -1030,8 +1069,18 @@ const ACT = {
   editDevice: d => deviceForm(dev(+d.id)),
   delDevice: d => { const x = dev(+d.id), n = kidsOf(x.id).length; if (confirm(x.type === 'group' ? `Bereich „${x.name}“ auflösen? Die ${n} Geräte darin bleiben erhalten.` : `„${x.name}“${n ? ` samt ${n} enthaltenen Einträgen` : ''} löschen?`)) { closePanel(); run(() => api('DELETE', '/api/devices/' + x.id)); } },
   addAddr: d => { const x = dev(+d.id); sel = x.id; openForm('Weitere Adresse', [[['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']],
-    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], {},
+    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['note', 'Notiz', 'area'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], {},
     data => api('POST', `/api/devices/${x.id}/addrs`, data), '', true); },
+  editAddr: d => { const x = dev(+d.id), a = addrsOf(x)[+d.idx]; sel = x.id; openForm(`Adresse ${esc(a.ip || a.mac)}`, [[['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']],
+    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['note', 'Notiz', 'area'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], a,
+    data => api('PUT', `/api/devices/${x.id}/addrs/${d.idx}`, data), '', true); },
+  editPrimary: d => { const x = dev(+d.id), m = x.meta || {}; sel = x.id; openForm(`Hauptadresse ${esc(x.ip || x.mac || '')}`,
+    [['label', 'Bezeichnung (z. B. eth0, Verwaltung)'], ['note', 'Notiz', 'area']], {label: m.primary_label, note: m.primary_note},
+    data => api('PUT', '/api/devices/' + x.id, {meta: {primary_label: data.label || null, primary_note: data.note || null}}), '', true); },
+  editMemo: d => { const x = dev(+d.id); sel = x.id; openForm(`Notizen zu ${esc(x.name)}`, [['memo', 'Notizen', 'area'], ['memo_show', 'Auf der Karte anzeigen', 'check']],
+    {memo: x.memo, memo_show: x.memo_show}, data => api('PUT', '/api/devices/' + x.id, data), '', true); },
+  memoToggle: d => { const x = dev(+d.id); run(() => api('PUT', '/api/devices/' + x.id, {memo_show: x.memo_show ? 0 : 1})); },
+  addrPrimary: d => run(() => api('POST', `/api/devices/${d.id}/addrs/${d.idx}/primary`), 'Hauptadresse gewechselt'),
   delAddr: d => { if (confirm('Adresse entfernen? Beim nächsten Scan taucht sie wieder als Fund auf.')) run(() => api('DELETE', `/api/devices/${d.id}/addrs/${d.idx}`)); },
   merge: d => {
     const x = dev(+d.id); sel = x.id;

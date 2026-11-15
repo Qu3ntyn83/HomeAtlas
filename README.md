@@ -96,6 +96,12 @@ Unter *Netzwerke → WLAN* legst du SSIDs an: Name, Netzwerk/VLAN, Band, Verschl
 Die SSIDs erscheinen als Pillen auf den AP-Karten. Funkverbindungen zeichnest du als Verbindung der Art **WLAN** (gepunktet, in der
 Farbe des zugehörigen VLANs, beschriftet mit der SSID). SSIDs und WLAN-Clients werden von Hand gepflegt; einen UniFi-Abgleich gibt es noch nicht.
 
+## Notizen am Gerät
+
+Neben der einzeiligen Kurzbeschreibung hat jedes Gerät ein mehrzeiliges Feld **Notizen**. Im Gerät blendet ein Knopf die Notizen auf der
+Karte ein oder aus: eingeblendet erscheinen sie als Notizzettel auf der Karte (bis zu sechs Zeilen), bei VMs und Containern als eine
+Zeile im Chip. Ausgeblendet bleiben sie im Gerät lesbar.
+
 ## Räume
 
 Jedes Gerät hat ein Feld **Raum** (mit Vorschlagsliste der schon verwendeten Räume; auch über die Sammeländerung setzbar). In der
@@ -126,6 +132,9 @@ Ein Gerät kann beliebig viele Adressen haben (z. B. ein NAS mit vier NICs in zw
   Geräte und Anbindungen wandern mit.
 - **Zu Gerät hinzufügen** (unter *Funde*): Ein neu gefundener Host wird direkt als weitere Adresse an ein vorhandenes Gerät gehängt.
 - **+ Adresse** (im Gerät): Adresse von Hand eintragen, etwa für ein Storage-Netz, das der Scanner nicht erreicht.
+
+Jede Adresse hat eine Bezeichnung und eine Notiz. **Als Hauptadresse** tauscht eine weitere Adresse mit der Hauptadresse – IP, MAC,
+Hostname, Netzwerk, Bezeichnung und Notiz wandern jeweils mit; die Hauptadresse ist die, die auf der Karte steht.
 
 Der Scan erkennt jede Adresse einzeln wieder. Das Gerät gilt als online, solange mindestens eine Adresse antwortet; die IP-Übersicht
 zeigt den Zustand je Adresse.

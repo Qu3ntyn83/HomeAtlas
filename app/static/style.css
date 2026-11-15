@@ -212,3 +212,6 @@ table.t input[type=checkbox]{width:16px;height:16px;accent-color:var(--link);cur
 .ihgrid{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
 .ihgrid button{background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:5px;cursor:pointer;line-height:0}
 .ihgrid button:hover{border-color:var(--muted)}
+
+/* ---------- Notizen */
+.memo{white-space:pre-wrap;background:#1d1a10;border:1px solid #5c5230;border-left:4px solid #d9c58a;border-radius:7px;padding:9px 11px;font-size:13px;color:#e6dcb8;overflow-wrap:anywhere}
