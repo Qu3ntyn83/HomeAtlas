@@ -91,7 +91,7 @@ def identify(h):
         sug.append(_s("synology", "Synology DSM-API", "DSM erkannt", "Volumes, Freigaben, Belegung, Systemstatus"))
     if "qnap" in vendor or has("qnap", "qts"):
         setk(type="nas", icon="qnap", os="QNAP QTS", url=web(443 if 443 in ports else 8080))
-        sug.append(_s("qnap", "QNAP-API", "QNAP erkannt", "Volumes, Freigaben, Belegung"))
+        sug.append(_s("qnap", "QNAP-API", "QNAP erkannt", "Modell, Netzwerkkarten, Platten (SMART), Volumes, Belegung"))
     if has("truenas"):
         setk(type="nas", icon="truenas", os="TrueNAS", url=web(443 if 443 in ports else 80))
         sug.append(_s("truenas", "TrueNAS-API", "Weboberfläche erkannt", "Pools, vdevs, Datasets, Belegung"))
