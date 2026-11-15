@@ -164,6 +164,8 @@ welche Integrationen wie viele Geräte haben. Unter *Bearbeiten* wählst du aus,
 `smartthings`, `roborock`). Danach gilt:
 
 - Geräte mit einer MAC, die LabVis schon kennt, werden nicht doppelt angelegt, sondern um Name, Typ, Hersteller, Modell und Raum ergänzt.
+- Kennt der Scan ein Gerät nur mit IP (anderes VLAN, daher keine MAC), ordnet LabVis es über die Netzwerk-Tracker in HA zu
+  (UniFi, FRITZ!Box: MAC ↔ IP) und trägt die MAC nach. Schon doppelt angelegte Geräte werden dabei wieder zusammengeführt.
 - Geräte hinter einer Bridge (z. B. Hue-Lampen) erscheinen als Chips in der Karte der Bridge; ab drei Geräten ohne Bridge entsteht ein Bereich je Integration.
 - HA-Bereiche werden zu Räumen, „unavailable" zu offline. Reine Anwesenheits-Tracker werden nie als Gerät angelegt.
 - Die Platzierung passiert nur beim ersten Mal; verschiebst du ein Gerät, bleibt das so.

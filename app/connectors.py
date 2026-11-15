@@ -441,7 +441,15 @@ HA_TEMPLATE = (
     " 'entry': device_attr(did,'entry_type'), 'integ': (config_entry_attr(ce,'domain') if ce else none),"
     " 'doms': ents | map('regex_replace','\\\\..*','') | unique | list, 'n': ents | count,"
     " 'un': ents | select('is_state','unavailable') | list | count}] %}"
-    "{% endfor %}{{ ns.out | tojson }}")
+    "{% endfor %}"
+    # Netzwerk-Tracker (UniFi, FRITZ!Box …) kennen MAC und IP zusammen – damit lassen sich Geräte zuordnen,
+    # die der Scan in fremden VLANs nur mit IP sieht
+    "{% set tr = namespace(out=[]) %}{% for s in states.device_tracker %}"
+    "{% if s.attributes.get('mac') and s.attributes.get('ip') %}"
+    "{% set tr.out = tr.out + [{'mac': s.attributes.get('mac'), 'ip': s.attributes.get('ip'),"
+    " 'host': s.attributes.get('host_name'), 'essid': s.attributes.get('essid')}] %}"
+    "{% endif %}{% endfor %}"
+    "{{ {'devs': ns.out, 'net': tr.out} | tojson }}")
 HA_TYPES = [("vacuum", "vacuum"), ("camera", "camera"), ("light", "light"), ("climate", "thermostat"), ("cover", "blind"),
             ("lock", "lock"), ("media_player", "speaker"), ("switch", "plug"), ("binary_sensor", "sensor"), ("sensor", "sensor")]
 HA_ICONS = {"hue": "philips-hue", "tplink": "tp-link", "smartthings": "smartthings", "roborock": "roborock", "tuya": "tuya",
@@ -479,7 +487,9 @@ def sync_homeassistant(integ):
                                  data=json.dumps({"template": HA_TEMPLATE}).encode(),
                                  headers={"Authorization": "Bearer " + c["token"].strip(), "Content-Type": "application/json"})
     with _OPENER.open(req, timeout=90) as r:
-        devs = json.loads(r.read().decode())
+        data = json.loads(r.read().decode())
+    devs, net = (data, []) if isinstance(data, list) else (data.get("devs", []), data.get("net", []))
+    mac2ip = {str(n["mac"]).upper().replace("-", ":"): n["ip"] for n in net if n.get("mac") and n.get("ip")}
     for d in devs:
         d["integ"] = d.get("integ") or (d["idents"][0][0] if d.get("idents") else "unbekannt")
     real = [d for d in devs if d.get("entry") != "service"]
@@ -493,19 +503,27 @@ def sync_homeassistant(integ):
         return (f"{len(real)} Geräte in {len(avail)} Integrationen gefunden – unter „Bearbeiten“ auswählen, "
                 f"welche Integrationen übernommen werden")
     plan = ha_plan(devs, chosen)
-    _, by_mac = scanner._index()
+    by_ip, by_mac = scanner._index()
     ids, seen, new, upd, linked = {}, set(), 0, 0, 0
     for d in plan:
         ext = "ha/" + d["id"]
         name = (d.get("name") or d.get("model") or "Gerät").strip()
         own = db.one("SELECT * FROM devices WHERE integration_id=? AND ext_id=?", (integ["id"], ext))
-        hit = None if own else (by_mac.get(d["mac"]) if d["mac"] else None)
+        ip = mac2ip.get(d["mac"]) if d["mac"] else None        # IP aus den Netzwerk-Trackern
+        cands = [by_mac.get(d["mac"]) if d["mac"] else None, by_ip.get(ip) if ip else None]
+        hit = next((h for h in cands if h and not (own and h[0] == own["id"])), None)
+        if hit and own:                           # früher neu angelegt, jetzt per IP wiedergefunden: Doppelten auflösen
+            db.x("UPDATE devices SET parent_id=NULL WHERE parent_id=?", (own["id"],))
+            db.delete_device(own["id"])
+            own = None
         up = d["n"] == 0 or d["un"] < d["n"]
         ha_meta = {"ha": {"integration": d["integ"], "sw": d.get("sw"), "id": d["id"]}}
         if hit:                                   # vorhandenes (gescanntes) Gerät: nur anreichern
             dev = db.one("SELECT * FROM devices WHERE id=?", (hit[0],))
             auto = dev["name"] in (dev.get("ip"), (dev.get("hostname") or "").split(".")[0], dev.get("mac"))
             patch = {"meta": {**(dev["meta"] or {}), **ha_meta}}
+            if d["mac"] and not dev.get("mac") and hit[1] is None:
+                patch["mac"] = d["mac"]           # der nächste Scan erkennt das Gerät dann auch über die MAC
             if auto and name:
                 patch["name"] = name
             if not dev.get("room") and d.get("area"):
@@ -530,14 +548,17 @@ def sync_homeassistant(integ):
                 patch["last_seen"] = db.now()
             if not own.get("room") and d.get("area"):
                 patch["room"] = d["area"]
-            if own["type"] in ("other", "iot") and ha_type(d):
+            if own["type"] == "other" and ha_type(d):
                 patch["type"] = ha_type(d)
+            if ip and not own.get("ip"):
+                patch.update(ip=ip, vlan_id=own.get("vlan_id") or vlan_for_ip(ip))
             db.update("devices", own["id"], {k: v for k, v in patch.items() if v is not None})
             ids[d["id"]] = own["id"]
             upd += 1
         else:
             ids[d["id"]] = db.insert("devices", {
                 "name": name, "type": ha_type(d) or "iot", "vendor": d.get("mf"), "model": d.get("model"), "mac": d["mac"],
+                "ip": ip, "vlan_id": vlan_for_ip(ip) if ip else None,
                 "room": d.get("area"), "status": "online" if up else "offline", "last_seen": db.now() if up else None,
                 "source": "homeassistant", "integration_id": integ["id"], "ext_id": ext, "meta": ha_meta})
             new += 1
