@@ -103,7 +103,8 @@ Stundenwerte 8 Tage, Ereignisse 30 Tage.
 | Antwort auf SNMP, Hersteller Aruba/HP/Cisco/MikroTik … | SNMP *(Connector)* |
 | Titel „OPNsense" | OPNsense-API *(Connector, experimentell)* |
 | Port 8123 / Titel „Home Assistant" | Home-Assistant-API *(Connector)* |
-| Synology, QNAP, TrueNAS, UniFi, Checkmk, FRITZ!Box, IPMI, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
+| Hersteller QNAP / Titel „QTS" | QNAP-API *(Connector)*: Modell, Firmware, Netzwerkkarten, Platten mit SMART-Zustand, Volumes |
+| Synology, TrueNAS, UniFi, Checkmk, FRITZ!Box, IPMI, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
 
 Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status aus dem Scan.
 

@@ -1089,7 +1089,7 @@ function integForm(i) {
     const id = isNew ? (await api('POST', '/api/integrations', body)).id : (await api('PUT', '/api/integrations/' + i.id, body), i.id);
     const r = await api('POST', `/api/integrations/${id}/sync`);
     setTimeout(() => toast(r.status, r.status.startsWith('Fehler')), 50);
-  }, '', !!i.device_id && sel === i.device_id);
+  }, k.help ? `<div class="hint" style="margin-top:12px;font-size:12.5px">${esc(k.help)}</div>` : '', !!i.device_id && sel === i.device_id);
   const pick = $('[name=pick]', panel);
   if (pick) pick.addEventListener('change', () => {
     const c = cands.find(x => x.v === pick.value), f = n => $(`[name=${n}]`, panel);

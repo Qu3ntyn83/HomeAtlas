@@ -16,6 +16,7 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 from . import db
 
@@ -28,6 +29,12 @@ KINDS = {
     "opnsense": {"label": "OPNsense (experimentell)", "fields": [
         ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche", "443"], ["key", "API-Key"],
         ["secret", "API-Secret", "", "password"]]},
+    "qnap": {"label": "QNAP QTS / QuTS hero", "fields": [
+        ["host", "Host/IP oder URL (https://nas:443)"], ["port", "Port der Weboberfläche", "443"], ["user", "Benutzer (Administratorgruppe)"],
+        ["password", "Passwort", "", "password"]],
+        "help": "QTS kennt keine API-Schlüssel – LabVis meldet sich mit einem Benutzer an. Lege dafür am NAS einen eigenen Benutzer an "
+                "(Systemsteuerung → Benutzer), Gruppe „administrators“, ohne zweistufige Anmeldung, mit langem Zufallspasswort und "
+                "ohne Zugriff auf Freigaben. LabVis liest nur und meldet sich nach jedem Abruf wieder ab."},
     "homeassistant": {"label": "Home Assistant", "fields": [
         ["host", "URL (http://homeassistant:8123)"], ["token", "Langlebiges Zugriffstoken", "", "password"]]},
 }
@@ -428,6 +435,175 @@ def sync_opnsense(integ):
     return f"{n} VLANs"
 
 
+# ------------------------------------------------------------------ QNAP
+# QTS hat keine API-Schlüssel: Anmeldung mit Benutzer und Passwort liefert eine Sitzungs-ID, die nach dem Abruf wieder
+# abgemeldet wird. Die Antworten sind XML.
+
+
+def _size(b):
+    b = float(b or 0)
+    for unit, f in (("TB", 1e12), ("GB", 1e9), ("MB", 1e6)):
+        if b >= f:
+            return f"{b / f:.1f}".rstrip("0").rstrip(".") + " " + unit
+    return "0 GB"
+
+
+def qnap_parse(sysinfo, disks=None, volumes=None):
+    """XML-Antworten → Gerätedaten. Getrennt vom Abruf, damit es testbar bleibt."""
+    t = lambda node, path: ((node.findtext(path) or "").strip() if node is not None else "")
+    root = sysinfo.find("func/ownContent/root")
+    if root is None:
+        raise RuntimeError("QNAP: Systeminformationen fehlen in der Antwort – gehört der Benutzer zur Administratorgruppe?")
+    out = {"name": t(root, "server_name"), "model": t(sysinfo, "model/displayModelName") or t(sysinfo, "model/modelName"),
+           "serial": t(root, "serial_number"), "fw": " ".join(x for x in (t(sysinfo, "firmware/version"), t(sysinfo, "firmware/build")) if x),
+           "platform": t(sysinfo, "firmware/name") or "QTS", "nics": [], "hw": [], "pools": []}
+    try:
+        cnt = int(t(root, "nic_cnt") or 0)
+    except ValueError:
+        cnt = 0
+    for i in range(1, cnt + 1):
+        ip, mac = t(root, f"eth_ip{i}"), t(root, f"eth_mac{i}").lower()
+        if not mac and not ip:
+            continue
+        out["nics"].append({"idx": i, "name": t(root, f"ifname{i}") or t(root, f"dname{i}") or f"LAN {i}",
+                            "ip": ip if ip and ip != "0.0.0.0" else "", "mac": mac, "up": t(root, f"eth_status{i}") == "1",
+                            "speed": speed_label(t(root, f"eth_max_speed{i}"))})
+    if t(root, "cpu_model"):
+        out["hw"].append({"icon": "glyph-cpu", "label": "CPU", "value": re.sub(r"\(R\)|\(TM\)|CPU ", "", t(root, "cpu_model")).strip(),
+                          "sub": (t(root, "cpu_tempc") + " °C") if t(root, "cpu_tempc") else ""})
+    try:
+        mem, free = float(t(root, "total_memory")), float(t(root, "free_memory") or 0)
+        out["hw"].append({"icon": "glyph-ram", "label": "MEMORY", "value": f"{round(mem / 1000)} GB", "sub": f"{round((mem - free) / 1024, 1)} GB belegt"})
+    except ValueError:
+        pass
+    bad = 0
+    for d in disks.findall("Disk_Info/entry") if disks is not None else []:
+        if not t(d, "Model"):
+            continue
+        health = t(d, "Health")
+        ok = health.upper() in ("OK", "GOOD", "")
+        bad += 0 if ok else 1
+        ssd = t(d, "hd_is_ssd") == "1"
+        temp = t(d, "Temperature/oC")
+        out["hw"].append({"icon": "glyph-ssd" if ssd else "glyph-hdd", "label": f"SCHACHT {t(d, 'HDNo')}", "value": f"{t(d, 'Model')} {t(d, 'Capacity')}".strip(),
+                          "sub": " · ".join(x for x in ("SMART " + (health or "?"), temp + " °C" if temp else "", t(d, "Serial")) if x)})
+    out["bad_disks"] = bad
+    if volumes is not None:
+        labels = {t(v, "volumeValue"): t(v, "volumeLabel") or "Volume " + t(v, "volumeValue") for v in volumes.findall("volumeList/volume")}
+        for u in volumes.findall("volumeUseList/volumeUse"):
+            try:
+                total, free = float(t(u, "total_size")), float(t(u, "free_size") or 0)
+            except ValueError:
+                continue
+            if total <= 0:
+                continue
+            shares = [t(f, "sharename") for f in u.findall("folder_element") if t(f, "sharename")]
+            out["pools"].append({"name": labels.get(t(u, "volumeValue"), "Volume " + t(u, "volumeValue")),
+                                 "layout": ", ".join(shares[:8]) + (" …" if len(shares) > 8 else ""),
+                                 "pct": round((total - free) / total * 100), "used": f"{_size(total - free)} von {_size(total)} belegt"})
+    return out
+
+
+def sync_qnap(integ):
+    c = integ["config"]
+    raw = (c.get("host") or "").strip()
+    scheme, host, port = endpoint(c, 443)
+    if "://" not in raw and str(port) in ("8080", "80"):        # 8080 ist bei QNAP der unverschlüsselte Standardport
+        scheme = "http"
+    if not c.get("user") or not c.get("password"):
+        raise RuntimeError("Benutzer und Passwort fehlen")
+    reach(host, port)
+    base = f"{scheme}://{host}:{port}/cgi-bin/"
+
+    def call(path, data=None):
+        req = urllib.request.Request(base + path, data=urllib.parse.urlencode(data).encode() if data else None)
+        try:
+            with _OPENER.open(req, timeout=20) as r:
+                body = r.read()
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(explain(e, "QNAP")) from None
+        try:
+            return ET.fromstring(body)
+        except ET.ParseError:
+            raise RuntimeError("QNAP: unerwartete Antwort – ist das die Weboberfläche des NAS (Port prüfen)?") from None
+
+    login = call("authLogin.cgi", {"user": c["user"].strip(), "pwd": base64.b64encode(c["password"].encode()).decode()})
+    sid = (login.findtext("authSid") or "").strip()
+    if (login.findtext("authPassed") or "").strip() != "1" or not sid:
+        if (login.findtext("need_2sv") or "").strip() == "1":
+            raise RuntimeError("QNAP: Für diesen Benutzer ist die zweistufige Anmeldung aktiv – dafür einen eigenen Benutzer ohne 2FA anlegen")
+        raise RuntimeError("QNAP: Anmeldung abgelehnt – Benutzer/Passwort prüfen (nach mehreren Fehlversuchen sperrt das NAS die Adresse)")
+    try:
+        q = urllib.parse.quote(sid)
+        sysinfo = call(f"management/manaRequest.cgi?subfunc=sysinfo&hd=no&multicpu=1&sid={q}")
+        if (sysinfo.findtext("authPassed") or "").strip() == "0":
+            raise RuntimeError("QNAP: angemeldet, aber ohne Zugriff auf die Systeminformationen – der Benutzer muss zur Administratorgruppe gehören")
+        extra = []
+        for path in (f"disk/qsmart.cgi?func=all_hd_data&sid={q}", f"management/chartReq.cgi?chart_func=disk_usage&disk_select=all&include=all&sid={q}"):
+            try:
+                extra.append(call(path))
+            except RuntimeError:
+                extra.append(None)                   # ältere Firmware kennt nicht jeden Abruf
+        info = qnap_parse(sysinfo, *extra)
+    finally:
+        try:
+            call(f"authLogout.cgi?logout=1&sid={urllib.parse.quote(sid)}")
+        except RuntimeError:
+            pass
+
+    nics = [n for n in info["nics"] if n["ip"] or n["mac"]]
+    main = next((n for n in nics if n["ip"] == host), None) or next((n for n in nics if n["ip"] and n["up"]), None) or \
+        next((n for n in nics if n["ip"]), None) or {"ip": host if re.match(r"^[\d.]+$", host or "") else "", "mac": "", "up": True, "name": ""}
+    dev = db.one("SELECT * FROM devices WHERE id=?", (integ.get("device_id") or 0,)) or \
+        db.one("SELECT * FROM devices WHERE integration_id=? AND ext_id='nas'", (integ["id"],))
+    for n in [main] + nics:
+        if dev:
+            break
+        dev = (db.one("SELECT * FROM devices WHERE ip=?", (n["ip"],)) if n.get("ip") else None) or \
+            (db.one("SELECT * FROM devices WHERE lower(mac)=?", (n["mac"],)) if n.get("mac") else None)
+    if not dev:
+        did = db.insert("devices", {"name": info["name"] or host, "type": "nas", "icon": "qnap", "ip": main["ip"], "mac": main["mac"],
+                                    "vlan_id": vlan_for_ip(main["ip"]), "source": "qnap", "integration_id": integ["id"], "ext_id": "nas"})
+        dev = db.one("SELECT * FROM devices WHERE id=?", (did,))
+    meta = dict(dev["meta"] or {})
+    # weitere Netzwerkkarten als zusätzliche Adressen; vorhandene Einträge (mit Notizen) bleiben, nur der Zustand wird gepflegt
+    addrs = [dict(a) for a in meta.get("addrs") or []]
+    own_ip = dev.get("ip") or main["ip"]
+    for n in nics:
+        if not n["ip"]:
+            continue
+        if n["ip"] == own_ip:
+            meta["up0"] = n["up"]
+            if not meta.get("primary_label"):
+                meta["primary_label"] = n["name"]
+            continue
+        ex = next((a for a in addrs if a.get("ip") == n["ip"] or (n["mac"] and (a.get("mac") or "").lower() == n["mac"])), None)
+        if ex:
+            ex.update(up=n["up"], ip=n["ip"], mac=n["mac"] or ex.get("mac"))
+        else:
+            addrs.append({"ip": n["ip"], "mac": n["mac"], "label": n["name"], "up": n["up"], "vlan_id": vlan_for_ip(n["ip"])})
+    if addrs:
+        meta["addrs"] = addrs
+    meta.update(ifaces=[{"idx": n["idx"], "name": n["name"], "alias": n["ip"], "up": n["up"], "speed": n["speed"]} for n in nics],
+                hw=info["hw"], pools=info["pools"])
+    if info["serial"]:
+        meta["serial"] = info["serial"]
+    upd = {"meta": meta, "status": "online", "last_seen": db.now(), "os": f"{info['platform']} {info['fw']}".strip(),
+           "integration_id": integ["id"], "ext_id": "nas"}
+    for k, v in (("hostname", info["name"]), ("model", info["model"]), ("vendor", "QNAP"), ("icon", "qnap"), ("ip", main["ip"]),
+                 ("mac", main["mac"] if (dev.get("ip") or main["ip"]) == main["ip"] else ""),
+                 ("url", f"{scheme}://{host}:{port}"), ("vlan_id", vlan_for_ip(main["ip"]))):
+        if v and not dev.get(k):
+            upd[k] = v
+    if dev["type"] in ("other", "server", "", None):
+        upd["type"] = "nas"
+    db.update("devices", dev["id"], upd)
+    db.update("integrations", integ["id"], {"device_id": dev["id"]})
+    disks = sum(1 for h in info["hw"] if h["label"].startswith("SCHACHT"))
+    warn = f" · ⚠ {info['bad_disks']} Platte(n) mit SMART-Warnung" if info["bad_disks"] else ""
+    return f"{info['name'] or host} · {info['model']} · {len(nics)} Netzwerkkarten, {disks} Platten, {len(info['pools'])} Volumes{warn}"
+
+
 # ------------------------------------------------------------------ Home Assistant
 # Ein einziger Aufruf der Template-API liefert die Geräte-Registry als JSON (ohne WebSocket-Verbindung).
 HA_TEMPLATE = (
@@ -594,7 +770,7 @@ def sync_homeassistant(integ):
     return f"{new} neu, {upd} aktualisiert, {linked} mit vorhandenen Geräten verknüpft ({', '.join(sorted(chosen))})"
 
 
-SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense,
+SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap,
         "homeassistant": sync_homeassistant}
 
 
