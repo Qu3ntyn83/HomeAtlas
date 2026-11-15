@@ -3,11 +3,12 @@
 Interaktive Homelab-Dokumentation in **einem Docker-Container**: Topologie-Diagramm, Rack-Ansicht,
 VLANs/IP-Übersicht, automatischer Netzwerk-Scan und Anbindungen, die Systeme regelmäßig auslesen.
 
-Die Idee kombiniert zwei Projekte:
+Die Idee kombiniert drei Projekte:
 
 - **[Homelable](https://github.com/Pouzor/homelable)** – interaktiver Canvas, nmap-Scan mit Fundliste, Live-Status
 - **[homelab-diagram](https://github.com/Goblinmine/homelab-diagram)** – die Optik: Ordner-Karten, Kabelbreite = Link-Geschwindigkeit,
   Trunks als helles Kabel mit dunklem Kern, Hardware-Kacheln, Container als Chips mit einer Zeile pro App
+- **[Overlook](https://github.com/bnlqn/overlook)** – der Aufbau der Überwachungs-Seite: was ist kaputt, wie geht es jedem Bereich, was war diese Woche
 
 Der Code ist eigenständig geschrieben (FastAPI + SQLite, Oberfläche ohne Build-Schritt).
 
@@ -66,6 +67,25 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 | **Funde** | Was der Scan gefunden hat und noch nicht dokumentiert ist – mit Typ-Vermutung, Schnittstellen-Vorschlägen und Suche. |
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
 | **System** | Intervalle, SNMP-Community, Export/Import. |
+
+## Überwachung
+
+Aus der Dokumentation wird mit einem Klick ein Monitoring: **Überwachung → Aus Dokumentation erzeugen** legt je Gerät mit IP einen
+Ping an, je bekanntem Dienst-Port (SSH, Proxmox, SMB, DNS …) einen Port-Check und je Weboberfläche einen HTTP-Check. Du wählst, für welche
+Bereiche (Netzwerk, Server, Speicher, Dienste, Smarthome); Clients und Rack-Platzhalter werden nie überwacht. Eigene Checks legst du mit
+**+ Check** oder direkt im Gerät an.
+
+- **Übersicht** nach dem Vorbild von [Overlook](https://github.com/bnlqn/overlook): was ist los, wie geht es jedem Bereich
+  (in Ordnung / beeinträchtigt / ausgefallen), die letzten 30 Ergebnisse je Check, Verfügbarkeit der letzten 24 Stunden, Ereignisse der Woche.
+- **Problem** ist ein Check erst nach zwei Fehlschlägen in Folge; nach dem ersten wird schon nach 15 Sekunden erneut geprüft.
+- **Noch nie erreichbar** ist kein Ausfall, sondern ein falsches Ziel: solche Checks melden nichts und lassen sich gesammelt entfernen.
+- **Topologie:** Der Ping-Check führt den Gerätestatus mit; läuft ein Gerät, aber einer seiner Dienste nicht, wird sein Punkt gelb.
+- **Benachrichtigung:** unter *System* eine ntfy-Adresse (`https://ntfy.sh/dein-thema`) oder einen Webhook eintragen, der Text per POST
+  annimmt. Gemeldet werden Ausfall und Erholung; mehrere Meldungen innerhalb weniger Sekunden kommen als eine.
+- **Gatus-Export:** die Checks als `endpoints`-Konfiguration für Gatus, falls du Gatus als Prüfmaschine und Overlook als Übersicht nutzen willst.
+
+Geprüft wird vom LabVis-Container aus (Standard alle 60 Sekunden, je Check einstellbar). Verlauf: Einzelergebnisse 12 Stunden,
+Stundenwerte 8 Tage, Ereignisse 30 Tage.
 
 ## Scan und Erkennung
 
