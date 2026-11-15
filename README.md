@@ -59,6 +59,9 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 
 ## Bereiche
 
+Das Menü steht links und lässt sich auf eine Symbolleiste einklappen (der Browser merkt sich die Wahl); auf dem Handy öffnet es sich
+als Schublade über das Menü-Symbol. Über „Zum Startbildschirm hinzufügen" lässt sich LabVis mit eigenem Symbol wie eine App ablegen.
+
 | Bereich | Inhalt |
 |---|---|
 | **Topologie** | Karten frei verschieben, zoomen, VLAN-Filter, Klick öffnet Details, Gerätesuche springt zur Karte. VMs/Container erscheinen als Chips im Host, deren Container als Zeilen. Export als SVG. |

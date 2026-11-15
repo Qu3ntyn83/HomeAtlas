@@ -92,6 +92,8 @@ async function load(silent) {
   if (load.build && S.build !== load.build && panelMode !== 'form') { location.reload(); return; }
   load.build = S.build;
   $('#title').textContent = S.settings.title || 'LabVis';
+  $('#who').textContent = S.user; $('#whorole').textContent = {read: 'Lesen', write: 'Ändern', admin: 'Admin'}[S.role] || '';
+  if (!$('#crumb').textContent) $('#crumb').textContent = 'Topologie';
   document.body.classList.toggle('ro', S.role === 'read');
   document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
   $('#badge').textContent = S.discoveries.filter(d => d.state === 'pending').length || '';
@@ -107,10 +109,23 @@ function render() {
   main.className = view === 'topo' ? 'canvas' : '';
   ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
 }
+// Seitenmenü: am Desktop ein-/ausklappbar (gemerkt), am Handy als Schublade
+const navStore = v => { try { if (v === undefined) return localStorage.getItem('labvis.nav'); localStorage.setItem('labvis.nav', v); } catch (e) { /* ohne Speicher gilt die Wahl bis zum Neuladen */ } return null; };
+const navDrawer = open => { document.body.classList.toggle('nav-open', open); $('#shade').hidden = !open; };
+function navMin(min) {
+  document.body.classList.toggle('nav-min', min);
+  $('#collapse').setAttribute('aria-expanded', String(!min)); $('#collapse .nl').textContent = min ? 'Ausklappen' : 'Einklappen';
+}
+navMin(navStore() === 'min');
+$('#collapse').addEventListener('click', () => { const min = !document.body.classList.contains('nav-min'); navMin(min); navStore(min ? 'min' : 'max'); if (view === 'topo' && S) setTimeout(fitView, 190); });
+$('#burger').addEventListener('click', () => navDrawer(true));
+$('#shade').addEventListener('click', () => navDrawer(false));
 $('#tabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b) return;
   view = b.dataset.view;
-  document.querySelectorAll('#tabs button').forEach(x => x.classList.toggle('on', x === b));
+  navDrawer(false);
+  $('#crumb').textContent = $('.nl', b).textContent;
+  document.querySelectorAll('#tabs button').forEach(x => { x.classList.toggle('on', x === b); x.toggleAttribute('aria-current', x === b); });
   closePanel(); render();
 });
 
@@ -1343,6 +1358,7 @@ const ACT = {
     a.download = 'homelab.svg'; a.click();
   },
 };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') navDrawer(false); });
 const READ_OK = new Set(['monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
