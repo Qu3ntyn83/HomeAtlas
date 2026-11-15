@@ -127,6 +127,9 @@ Ein Gerät kann beliebig viele Adressen haben (z. B. ein NAS mit vier NICs in zw
 - **Zu Gerät hinzufügen** (unter *Funde*): Ein neu gefundener Host wird direkt als weitere Adresse an ein vorhandenes Gerät gehängt.
 - **+ Adresse** (im Gerät): Adresse von Hand eintragen, etwa für ein Storage-Netz, das der Scanner nicht erreicht.
 
+Jede Adresse hat eine Bezeichnung und eine Notiz. **Als Hauptadresse** tauscht eine weitere Adresse mit der Hauptadresse – IP, MAC,
+Hostname, Netzwerk, Bezeichnung und Notiz wandern jeweils mit; die Hauptadresse ist die, die auf der Karte steht.
+
 Der Scan erkennt jede Adresse einzeln wieder. Das Gerät gilt als online, solange mindestens eine Adresse antwortet; die IP-Übersicht
 zeigt den Zustand je Adresse.
 

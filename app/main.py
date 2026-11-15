@@ -18,7 +18,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.10.1"
+VERSION = "0.11.0"
 
 
 def _build_id():
@@ -266,8 +266,67 @@ def _add_addr(dev, addr):
 def add_addr(did: int, data: dict = Body(...)):
     if not data.get("ip") and not data.get("mac"):
         raise HTTPException(400, "IP oder MAC angeben")
-    _add_addr(_dev(did), {k: data.get(k) for k in ("ip", "mac", "label")} |
+    _add_addr(_dev(did), {k: data.get(k) for k in ("ip", "mac", "label", "note")} |
               {"vlan_id": int(data["vlan_id"]) if data.get("vlan_id") else None})
+    return {"ok": True}
+
+
+def _addr(dev, idx):
+    addrs = (dev["meta"] or {}).get("addrs") or []
+    if not 0 <= idx < len(addrs):
+        raise HTTPException(404, "Adresse nicht gefunden")
+    return addrs[idx]
+
+
+@app.put("/api/devices/{did}/addrs/{idx}")
+def edit_addr(did: int, idx: int, data: dict = Body(...)):
+    """Bezeichnung, Notiz, IP, MAC und Netzwerk einer weiteren Adresse ändern."""
+    dev = _dev(did)
+    a = _addr(dev, idx)
+    for k in ("label", "note", "ip", "mac"):
+        if k in data:
+            v = (data[k] or "").strip()
+            a[k] = v.upper() if k == "mac" else v
+            if not a[k]:
+                a.pop(k)
+    if "vlan_id" in data:
+        a["vlan_id"] = int(data["vlan_id"]) if data["vlan_id"] else (connectors.vlan_for_ip(a.get("ip")) if a.get("ip") else None)
+    if not a.get("ip") and not a.get("mac"):
+        raise HTTPException(400, "IP oder MAC angeben")
+    db.update("devices", did, {"meta": dev["meta"]})
+    return {"ok": True}
+
+
+@app.post("/api/devices/{did}/addrs/{idx}/primary")
+def make_primary(did: int, idx: int):
+    """Tauscht eine weitere Adresse mit der Hauptadresse. Bezeichnung und Notiz wandern jeweils mit."""
+    dev = _dev(did)
+    meta = dev["meta"] or {}
+    a = _addr(dev, idx)
+    old = {"ip": dev.get("ip"), "mac": dev.get("mac"), "vendor": dev.get("vendor"), "vlan_id": dev.get("vlan_id"),
+           "label": meta.get("primary_label"), "note": meta.get("primary_note"),
+           "up": meta.get("up0", dev["status"] == "online" if dev["status"] != "unknown" else None),
+           "last_seen": dev.get("last_seen")}
+    upd = {"ip": a.get("ip"), "mac": a.get("mac"), "vendor": a.get("vendor") or dev.get("vendor"),
+           "vlan_id": a.get("vlan_id") or (connectors.vlan_for_ip(a.get("ip")) if a.get("ip") else dev.get("vlan_id"))}
+    if a.get("hostname"):                         # der Hostname gehört zur Adresse und tauscht mit
+        old["hostname"] = dev.get("hostname")
+        upd["hostname"] = a["hostname"]
+    meta["primary_label"], meta["primary_note"] = a.get("label"), a.get("note")
+    if a.get("up") is not None:
+        meta["up0"] = bool(a["up"])
+    else:
+        meta.pop("up0", None)
+    old = {k: v for k, v in old.items() if v not in (None, "")}
+    if old.get("ip") or old.get("mac"):
+        meta["addrs"][idx] = old
+    else:
+        meta["addrs"].pop(idx)
+    upd["meta"] = {k: v for k, v in meta.items() if v is not None}
+    with db.conn() as c:                          # ip/mac dürfen dabei auch leer werden, deshalb direkt statt über update()
+        c.execute("UPDATE devices SET ip=?, mac=?, vendor=?, vlan_id=?, hostname=?, meta=? WHERE id=?",
+                  (upd["ip"], upd["mac"], upd["vendor"], upd["vlan_id"], upd.get("hostname", dev.get("hostname")),
+                   db._enc(upd["meta"]), did))
     return {"ok": True}
 
 

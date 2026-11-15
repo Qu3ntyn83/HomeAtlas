@@ -421,7 +421,7 @@ function renderTopo() {
   focusSel();
   $('#topoq').addEventListener('input', e => {
     const q = e.target.value, box = $('#tres');
-    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => a.ip).join(' '))).slice(0, 10) : [];
+    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => [a.ip, a.label, a.note].join(' ')).join(' '))).slice(0, 10) : [];
     box.hidden = !q.trim();
     box.innerHTML = hits.map(d => `<button data-act="jump" data-id="${d.id}"><img src="${icon(d)}" width="18" height="18" alt=""><b>${esc(d.name)}</b><span class="mono">${esc(d.ip || '')}</span></button>`).join('') ||
       '<span class="muted" style="padding:8px 10px;display:block">Keine Treffer</span>';
@@ -535,11 +535,20 @@ function showDevice(id, keep) {
     fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
     fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>';
-  if (addrsOf(d).length) h += `<h3>Weitere Adressen (${addrsOf(d).length})</h3>` + addrsOf(d).map((a, n) => { const av = vlan(a.vlan_id);
-    return `<div class="rowl" style="flex-wrap:wrap"><span class="dot ${a.up === true ? 'online' : a.up === false ? 'offline' : ''}"></span><span class="mono">${esc(a.ip || '–')}</span>` +
-      `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
-      `<button class="btn sm" style="margin-left:auto" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button>` +
-      `${a.mac ? `<span class="mono faint" style="flex-basis:100%;font-size:11.5px;padding-left:17px">${esc(a.mac)}${a.vendor ? ' · ' + esc(a.vendor) : ''}</span>` : ''}</div>`; }).join('');
+  if (addrsOf(d).length) {
+    const sub = t => `<span class="faint" style="flex-basis:100%;font-size:12px;padding-left:17px">${t}</span>`;
+    h += `<h3>Adressen (${addrsOf(d).length + 1})</h3><div class="rowl" style="flex-wrap:wrap"><span class="dot ${m.up0 === true ? 'online' : m.up0 === false ? 'offline' : d.status}"></span>` +
+      `<span class="mono">${esc(d.ip || '–')}</span>${m.primary_label ? `<b>${esc(m.primary_label)}</b>` : ''}<span style="margin-left:auto;display:flex;gap:4px;align-items:center"><span class="pill" style="color:var(--text)">Hauptadresse</span>` +
+      `<button class="btn sm" data-act="editPrimary" data-id="${id}" aria-label="Bezeichnung und Notiz der Hauptadresse bearbeiten">✎</button></span>` +
+      (d.mac ? sub(`<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) : '') + (m.primary_note ? sub(esc(m.primary_note)) : '') + '</div>' +
+      addrsOf(d).map((a, n) => { const av = vlan(a.vlan_id);
+        return `<div class="rowl" style="flex-wrap:wrap"><span class="dot ${a.up === true ? 'online' : a.up === false ? 'offline' : ''}"></span><span class="mono">${esc(a.ip || '–')}</span>` +
+          `${a.label ? `<b>${esc(a.label)}</b>` : ''}${av ? `<span style="color:${esc(av.color)};font-size:12px">${esc(av.vid != null ? vtag(av) : av.name)}</span>` : ''}` +
+          `<span style="margin-left:auto;display:flex;gap:4px"><button class="btn sm" data-act="addrPrimary" data-id="${id}" data-idx="${n}" title="Zur Hauptadresse machen">Als Hauptadresse</button>` +
+          `<button class="btn sm" data-act="editAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse bearbeiten">✎</button>` +
+          `<button class="btn sm" data-act="delAddr" data-id="${id}" data-idx="${n}" aria-label="Adresse entfernen">✕</button></span>` +
+          (a.mac ? sub(`<span class="mono">${esc(a.mac)}</span>${a.vendor ? ' · ' + esc(a.vendor) : ''}`) : '') + (a.note ? sub(esc(a.note)) : '') + '</div>'; }).join('');
+  }
   if (d.type === 'shelf') h += `<h3>Auf diesem Boden (${onShelf(id).length})</h3>` + (onShelf(id).map(x => `<div class="rowl"><img src="${icon(x)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${x.id}">${esc(x.name)}</a>` +
     `<button class="btn sm" style="margin-left:auto" data-act="shelfRemove" data-id="${x.id}" aria-label="Vom Boden nehmen">✕</button></div>`).join('') || '<span class="muted">leer</span>') +
     `<div class="acts"><button class="btn sm pri" data-act="shelfAdd" data-id="${id}">Gerät daraufstellen</button></div>`;
@@ -1030,8 +1039,15 @@ const ACT = {
   editDevice: d => deviceForm(dev(+d.id)),
   delDevice: d => { const x = dev(+d.id), n = kidsOf(x.id).length; if (confirm(x.type === 'group' ? `Bereich „${x.name}“ auflösen? Die ${n} Geräte darin bleiben erhalten.` : `„${x.name}“${n ? ` samt ${n} enthaltenen Einträgen` : ''} löschen?`)) { closePanel(); run(() => api('DELETE', '/api/devices/' + x.id)); } },
   addAddr: d => { const x = dev(+d.id); sel = x.id; openForm('Weitere Adresse', [[['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']],
-    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], {},
+    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['note', 'Notiz', 'area'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], {},
     data => api('POST', `/api/devices/${x.id}/addrs`, data), '', true); },
+  editAddr: d => { const x = dev(+d.id), a = addrsOf(x)[+d.idx]; sel = x.id; openForm(`Adresse ${esc(a.ip || a.mac)}`, [[['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']],
+    ['label', 'Bezeichnung (z. B. eth1, Storage-Netz)'], ['note', 'Notiz', 'area'], ['vlan_id', 'Netzwerk (leer = automatisch nach Subnetz)', 'select', vlanOpts()]], a,
+    data => api('PUT', `/api/devices/${x.id}/addrs/${d.idx}`, data), '', true); },
+  editPrimary: d => { const x = dev(+d.id), m = x.meta || {}; sel = x.id; openForm(`Hauptadresse ${esc(x.ip || x.mac || '')}`,
+    [['label', 'Bezeichnung (z. B. eth0, Verwaltung)'], ['note', 'Notiz', 'area']], {label: m.primary_label, note: m.primary_note},
+    data => api('PUT', '/api/devices/' + x.id, {meta: {primary_label: data.label || null, primary_note: data.note || null}}), '', true); },
+  addrPrimary: d => run(() => api('POST', `/api/devices/${d.id}/addrs/${d.idx}/primary`), 'Hauptadresse gewechselt'),
   delAddr: d => { if (confirm('Adresse entfernen? Beim nächsten Scan taucht sie wieder als Fund auf.')) run(() => api('DELETE', `/api/devices/${d.id}/addrs/${d.idx}`)); },
   merge: d => {
     const x = dev(+d.id); sel = x.id;
