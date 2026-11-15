@@ -10,23 +10,47 @@
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 html,body{height:100%;margin:0}
-body{background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);display:flex;flex-direction:column;overflow:hidden}
+body{background:var(--bg);color:var(--text);font:14px/1.45 var(--sans);display:flex;overflow:hidden}
 button,input,select,textarea{font:inherit;color:inherit}
 a{color:var(--link);text-decoration:none}
 .mono{font-family:var(--mono)}
 .muted{color:var(--muted)}.faint{color:var(--faint)}
 
-#top{display:flex;align-items:center;gap:22px;padding:10px 18px;border-bottom:1px solid var(--border);flex:none}
-#title{font-size:22px;font-weight:700;margin:0;white-space:nowrap;letter-spacing:-.2px}
-#tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
-#tabs button{background:none;border:0;border-bottom:2px solid transparent;padding:8px 12px;color:var(--muted);
-  font:500 13px var(--mono);cursor:pointer;white-space:nowrap}
-#tabs button.on{color:var(--text);border-color:var(--accent)}
-#tabs button:hover{color:var(--text)}
-#badge{margin-left:6px;background:var(--warn);color:#111;border-radius:9px;padding:0 6px;font-size:11px}
-#badge:empty{display:none}
-#scanstate{margin-left:auto;font:12px var(--mono);color:var(--warn);white-space:nowrap}
-
+/* ---------- Gerüst: Seitenmenü links, daneben Kopfzeile und Inhalt */
+#col{flex:1;min-width:0;display:flex;flex-direction:column}
+#top{display:flex;align-items:center;gap:12px;padding:9px 18px;border-bottom:1px solid var(--border);flex:none;min-height:46px}
+#title{font-size:17px;font-weight:700;margin:0;white-space:nowrap;letter-spacing:-.2px}
+#crumb{font:500 12.5px var(--mono);white-space:nowrap}
+#crumb::before{content:"/ ";color:var(--faint)}
+#scanstate{margin-left:auto;font:12px var(--mono);color:var(--warn);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#burger{display:none;background:none;border:0;padding:4px;margin-left:-6px;cursor:pointer;color:var(--text)}
+.ni{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#side{width:212px;flex:none;display:flex;flex-direction:column;background:#0e131b;border-right:1px solid var(--border);transition:width .16s ease;overflow:hidden}
+.brand{display:flex;align-items:center;gap:11px;padding:13px 14px 12px;font-size:20px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}
+.brand .mark{width:30px;height:27px;flex:none}
+#tabs{display:flex;flex-direction:column;gap:2px;padding:6px 8px;flex:1;overflow-y:auto;scrollbar-width:none}
+#tabs button,.sidefoot button{display:flex;align-items:center;gap:12px;width:100%;background:none;border:0;border-left:3px solid transparent;border-radius:0 8px 8px 0;
+  padding:9px 10px 9px 9px;color:var(--muted);font:500 13.5px var(--sans);cursor:pointer;white-space:nowrap;text-align:left}
+#tabs button:hover,.sidefoot button:hover{color:var(--text);background:#141b25}
+#tabs button.on{color:var(--text);background:#161f2b;border-left-color:var(--accent)}
+#tabs button.on .ni{color:var(--accent)}
+.nl{overflow:hidden;text-overflow:ellipsis}
+#badge,#mbadge{margin-left:auto;border-radius:9px;padding:0 6px;font:500 11px var(--mono);line-height:17px}
+#badge{background:var(--warn);color:#111}
+#mbadge{background:var(--bad);color:#fff}
+#badge:empty,#mbadge:empty{display:none}
+.sidefoot{padding:8px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+.who{padding:4px 12px 6px;font-size:12.5px;display:flex;flex-direction:column;line-height:1.3}
+.who span{font-size:11.5px}
+#collapse .ni{transition:transform .16s ease}
+/* eingeklappt: nur noch die Symbolleiste */
+body.nav-min #side{width:58px}
+body.nav-min .nl{display:none}
+body.nav-min .brand{padding-left:14px}
+body.nav-min #tabs button,body.nav-min .sidefoot button{justify-content:center;padding:9px 0;position:relative;gap:0}
+body.nav-min #badge,body.nav-min #mbadge{position:absolute;top:3px;right:5px;margin:0;padding:0 4px;font-size:9.5px;line-height:14px}
+body.nav-min #collapse .ni{transform:rotate(180deg)}
+#shade{position:fixed;inset:0;background:#000a;z-index:39}
 #main{flex:1;min-height:0;position:relative;overflow:auto}
 #main.canvas{overflow:hidden}
 .page{padding:20px;max-width:1500px;margin:0 auto}
@@ -154,9 +178,17 @@ table.t th{color:var(--faint);font:600 11px var(--sans);letter-spacing:1px;text-
 #toast.err{border-color:var(--bad);color:#ffb4ae}
 
 @media (max-width:760px){
-  #top{flex-wrap:wrap;gap:4px 12px;padding:8px 12px}
-  #title{font-size:18px}
-  #tabs{order:3;width:100%}
+  #top{padding:8px 12px;gap:10px}
+  #burger{display:block}
+  #crumb{display:none}
+  /* schmal: das Menü liegt als Schublade über dem Inhalt */
+  #side,body.nav-min #side{position:fixed;left:0;top:0;bottom:0;width:250px;z-index:40;transform:translateX(-102%);transition:transform .18s ease;box-shadow:12px 0 40px #000a}
+  body.nav-open #side{transform:none}
+  body.nav-min .nl{display:revert}
+  body.nav-min #tabs button,body.nav-min .sidefoot button{justify-content:flex-start;padding:11px 10px 11px 9px;gap:12px}
+  body.nav-min #badge,body.nav-min #mbadge{position:static;margin-left:auto;padding:0 6px;font-size:11px;line-height:17px}
+  #tabs button,.sidefoot button{padding:11px 10px 11px 9px}
+  #collapse{display:none!important}
   #panel{top:auto;left:0;width:100%;max-height:78vh;border-left:0;border-top:1px solid var(--border);border-radius:14px 14px 0 0;
     box-shadow:0 -12px 40px #000a}
   #legend{display:none}
@@ -217,8 +249,6 @@ table.t input[type=checkbox]{width:16px;height:16px;accent-color:var(--link);cur
 .memo{white-space:pre-wrap;background:#1d1a10;border:1px solid #5c5230;border-left:4px solid #d9c58a;border-radius:7px;padding:9px 11px;font-size:13px;color:#e6dcb8;overflow-wrap:anywhere}
 
 /* ---------- Überwachung */
-#mbadge{margin-left:6px;background:var(--bad);color:#fff;border-radius:9px;padding:0 6px;font-size:11px}
-#mbadge:empty{display:none}
 .dot.warn{background:var(--warn)}
 .mbanner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;border:1px solid var(--border);border-left:4px solid var(--ok);border-radius:10px;padding:12px 15px;background:var(--panel);margin-bottom:6px}
 .mbanner.bad{border-left-color:var(--bad)}
@@ -240,3 +270,4 @@ table.t input[type=checkbox]{width:16px;height:16px;accent-color:var(--link);cur
 .mday{font:600 11px var(--sans);letter-spacing:1px;text-transform:uppercase;color:var(--faint);margin:10px 0 2px}
 .mday:first-child{margin-top:0}
 @media (max-width:760px){.mpct{display:none}.bars i{width:2.5px}}
+@media (prefers-reduced-motion:reduce){#side,#collapse .ni{transition:none}}

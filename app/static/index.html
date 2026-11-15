@@ -3,25 +3,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0f15">
 <title>LabVis</title>
-<link rel="icon" href="/static/icons/type-hypervisor.svg">
+<link rel="icon" type="image/svg+xml" href="/static/brand/favicon.svg">
+<link rel="alternate icon" type="image/png" sizes="32x32" href="/static/brand/icon-32.png">
+<link rel="apple-touch-icon" href="/static/brand/icon-180.png">
+<link rel="manifest" href="/static/brand/manifest.json">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header id="top">
-  <h1 id="title">LabVis</h1>
-  <nav id="tabs">
-    <button data-view="topo" class="on">Topologie</button>
-    <button data-view="monitor">Überwachung<span id="mbadge"></span></button>
-    <button data-view="racks">Racks</button>
-    <button data-view="nets">Netzwerke</button>
-    <button data-view="finds">Funde<span id="badge"></span></button>
-    <button data-view="integ">Anbindungen</button>
-    <button data-view="system">System</button>
+<aside id="side">
+  <div class="brand"><svg class="mark" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="6 8 52 46">
+  <path d="M9 24v-7.500a4.500 4.500 0 0 1 4.500-4.500h12.300a4.500 4.500 0 0 1 3.500 1.700l3.400 4.300h17.800a4.500 4.500 0 0 1 4.500 4.500v25a4.500 4.500 0 0 1-4.500 4.500h-37a4.500 4.500 0 0 1-4.500-4.500z" fill="#161f2b" stroke="#ff5722" stroke-width="3.4" stroke-linejoin="round"/>
+  <path d="M21 42l11-12 11 12" fill="none" stroke="#8d9aab" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="32" cy="30" r="4.600" fill="#79c0ff"/>
+  <circle cx="21" cy="42" r="4.600" fill="#3fb950"/>
+  <circle cx="43" cy="42" r="4.600" fill="#e6edf3"/>
+</svg><span class="nl">LabVis</span></div>
+  <nav id="tabs" aria-label="Bereiche">
+    <button data-view="topo" class="on" title="Topologie"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.500"/><circle cx="5" cy="18" r="2.500"/><circle cx="19" cy="18" r="2.500"/><path d="M10.700 7.200L6.300 15.800M13.300 7.200l4.400 8.600M7.500 18h9"/></svg><span class="nl">Topologie</span></button>
+    <button data-view="monitor" title="Überwachung"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.500-6 4 12 2.500-6h5"/></svg><span class="nl">Überwachung</span><span id="mbadge"></span></button>
+    <button data-view="racks" title="Racks"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M5 9h14M5 15h14M8.500 6h.01M8.500 12h.01M8.500 18h.01"/></svg><span class="nl">Racks</span></button>
+    <button data-view="nets" title="Netzwerke"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.800 3 2.800 15 0 18M12 3c-2.800 3-2.800 15 0 18"/></svg><span class="nl">Netzwerke</span></button>
+    <button data-view="finds" title="Funde"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.500"/><path d="M16 16l4.500 4.500M11 8v3l2 1.500"/></svg><span class="nl">Funde</span><span id="badge"></span></button>
+    <button data-view="integ" title="Anbindungen"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v5M15 3v5M6.500 8h11v3.500a5.500 5.500 0 0 1-11 0zM12 17v4"/></svg><span class="nl">Anbindungen</span></button>
+    <button data-view="system" title="System"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.500M12 18.500V21M3 12h2.500M18.500 12H21M5.600 5.600l1.800 1.800M16.600 16.600l1.800 1.800M5.600 18.400l1.800-1.800M16.600 7.400l1.800-1.800"/></svg><span class="nl">System</span></button>
   </nav>
-  <div id="scanstate"></div>
-</header>
-<main id="main"></main>
+  <div class="sidefoot">
+    <div class="who nl"><b id="who"></b><span id="whorole" class="muted"></span></div>
+    <button id="logout" data-act="logout" title="Abmelden"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4M15 8l4 4-4 4M19 12H9"/></svg><span class="nl">Abmelden</span></button>
+    <button id="collapse" title="Menü ein- oder ausklappen" aria-expanded="true"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6M19 6v12"/></svg><span class="nl">Einklappen</span></button>
+  </div>
+</aside>
+<div id="shade" hidden></div>
+<div id="col">
+  <header id="top">
+    <button id="burger" aria-label="Menü öffnen"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <h1 id="title">LabVis</h1>
+    <span id="crumb" class="muted"></span>
+    <div id="scanstate"></div>
+  </header>
+  <main id="main"></main>
+</div>
 <aside id="panel" hidden></aside>
 <div id="toast" hidden></div>
 <script src="/static/app.js"></script>
