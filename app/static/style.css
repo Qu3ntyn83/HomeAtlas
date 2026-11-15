@@ -27,7 +27,7 @@ a{color:var(--link);text-decoration:none}
 .ni{width:20px;height:20px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
 #side{width:212px;flex:none;display:flex;flex-direction:column;background:#0e131b;border-right:1px solid var(--border);transition:width .16s ease;overflow:hidden}
 .brand{display:flex;align-items:center;gap:11px;padding:13px 14px 12px;font-size:20px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}
-.brand .mark{width:30px;height:27px;flex:none}
+.brand .mark{width:30px;height:30px;flex:none}
 #tabs{display:flex;flex-direction:column;gap:2px;padding:6px 8px;flex:1;overflow-y:auto;scrollbar-width:none}
 #tabs button,.sidefoot button{display:flex;align-items:center;gap:12px;width:100%;background:none;border:0;border-left:3px solid transparent;border-radius:0 8px 8px 0;
   padding:9px 10px 9px 9px;color:var(--muted);font:500 13.5px var(--sans);cursor:pointer;white-space:nowrap;text-align:left}
