@@ -3,6 +3,22 @@
 Interaktive Homelab-Dokumentation in **einem Docker-Container**: Topologie-Diagramm, Rack-Ansicht,
 VLANs/IP-Übersicht, automatischer Netzwerk-Scan und Anbindungen, die Systeme regelmäßig auslesen.
 
+![Topologie: Geräte als Karten, Kabel nach Geschwindigkeit und VLAN gefärbt](docs/screenshots/topologie.png)
+
+| Überwachung | Racks |
+|---|---|
+| ![Überwachung mit Bereichen, Verlauf und einem Ausfall](docs/screenshots/ueberwachung.png) | ![Rack-Ansicht mit Geräten, Patchpanel, Rackboden und Blende](docs/screenshots/racks.png) |
+| **Netzwerke** | **Gerätedetails** |
+| ![Netzwerke und IP-Übersicht](docs/screenshots/netzwerke.png) | ![Seitenleiste mit den Details eines Geräts](docs/screenshots/geraet.png) |
+
+<p align="center">
+  <img src="docs/screenshots/handy-menue.png" alt="Menü auf dem Handy" width="260">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/handy-ueberwachung.png" alt="Überwachung auf dem Handy" width="260">
+</p>
+
+<sub>Die Bilder zeigen Beispieldaten aus dem homelab-diagram-Projekt.</sub>
+
 Die Idee kombiniert drei Projekte:
 
 - **[Homelable](https://github.com/Pouzor/homelable)** – interaktiver Canvas, nmap-Scan mit Fundliste, Live-Status
