@@ -32,7 +32,7 @@ KINDS = {
                        "Für andere Hosts die Adresse einer freigegebenen Docker-API oder eines docker-socket-proxy eintragen."},
     "snmp": {"label": "SNMP v2c", "fields": [["host", "Host/IP"], ["community", "Community", "public", "password"]]},
     "opnsense": {"label": "OPNsense (experimentell)", "fields": [
-        ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche", "443"], ["key", "API-Key"],
+        ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche (80 = ohne TLS)", "443"], ["key", "API-Key"],
         ["secret", "API-Secret", "", "password"]]},
     "qnap": {"label": "QNAP QTS / QuTS hero", "fields": [
         ["host", "Host/IP oder URL (https://nas:443)"], ["port", "Port der Weboberfläche", "443"], ["user", "Benutzer (Administratorgruppe)"],
@@ -110,7 +110,10 @@ def endpoint(cfg, default_port, scheme="https"):
         u = urllib.parse.urlparse(raw)
         return u.scheme, u.hostname, u.port or cfg.get("port") or (443 if u.scheme == "https" else 80)
     host, _, p = raw.partition(":")
-    return scheme, host, p or cfg.get("port") or default_port
+    port = p or cfg.get("port") or default_port
+    if str(port).strip() == "80":                    # Port 80 ist unverschlüsselt – auch ohne http:// davor
+        scheme = "http"
+    return scheme, host, port
 
 
 def vlan_for_ip(ip):
@@ -473,8 +476,16 @@ def sync_opnsense(integ):
     if not c.get("key") or not c.get("secret"):
         raise RuntimeError("API-Key und API-Secret fehlen (OPNsense: System → Zugang → Benutzer → API-Schlüssel)")
     reach(host, port)
-    base = f"{scheme}://{host}:{port}/api"
     hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['key'].strip()}:{c['secret'].strip()}".encode()).decode()}
+    if scheme == "https" and "://" not in (c.get("host") or ""):      # Weboberfläche ohne TLS auf einem anderen Port: selbst erkennen
+        try:
+            _get(f"https://{host}:{port}/api/core/firmware/status", hdr, timeout=8)
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, ssl.SSLError) and not isinstance(e, urllib.error.HTTPError):
+                scheme = "http"
+        except Exception:  # noqa: BLE001 – alles andere klärt der eigentliche Abruf
+            pass
+    base = f"{scheme}://{host}:{port}/api"
 
     def first(*paths):
         err = None
