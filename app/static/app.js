@@ -92,6 +92,7 @@ async function load(silent) {
   if (load.build && S.build !== load.build && panelMode !== 'form') { location.reload(); return; }
   load.build = S.build;
   $('#title').textContent = S.settings.title || 'LabVis';
+  renderNavLinks();
   $('#who').textContent = S.user; $('#whorole').textContent = {read: 'Lesen', write: 'Ändern', admin: 'Admin'}[S.role] || '';
   if (!$('#crumb').textContent) $('#crumb').textContent = 'Topologie';
   document.body.classList.toggle('ro', S.role === 'read');
@@ -681,6 +682,7 @@ function iconHelp(inp) {
 }
 function openForm(title, fields, val, onSave, extra, keepSel) {
   if (ro()) return;
+  navBack = false;
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
   if ($('[name=memo]', panel)) $('[name=memo]', panel).rows = 6;
@@ -1158,8 +1160,12 @@ function renderSystem() {
 
 // ------------------------------------------------------------ Aktionen
 const ACT = {
-  close: closePanel,
-  cancel: () => { if (sel && dev(sel)) showDevice(sel); else closePanel(); },
+  close: () => { navBack = false; closePanel(); },
+  navEdit: () => navEditPanel(),
+  newNav: () => navForm({}),
+  editNav: d => navForm(S.navlinks.find(l => l.id === +d.id)),
+  delNav: d => { const l = S.navlinks.find(x => x.id === +d.id); if (confirm(`Link „${l.label}“ aus dem Menü entfernen?`)) run(async () => { await api('DELETE', '/api/navlinks/' + l.id); await load(true); navEditPanel(); }); },
+  cancel: () => { if (navBack) { navBack = false; navEditPanel(); } else if (sel && dev(sel)) showDevice(sel); else closePanel(); },
   show: d => { const x = dev(+d.id); if (x) showDevice(x.id); },
   goFinds: () => $('#tabs [data-view="finds"]').click(),
   fit: fitView,
@@ -1359,6 +1365,61 @@ const ACT = {
   },
 };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') navDrawer(false); });
+// ---------- eigene Links im Seitenmenü: mit oder ohne Kategorie, Kategorien einklappbar (je Browser gemerkt)
+const NAV_LINK_ICO = '<svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.700 0l3-3a4 4 0 0 0-5.700-5.700l-1 1M14 10a4 4 0 0 0-5.700 0l-3 3a4 4 0 0 0 5.700 5.700l1-1"/></svg>';
+const navClosed = v => { try { if (v === undefined) return JSON.parse(localStorage.getItem('labvis.navgrp') || '[]'); localStorage.setItem('labvis.navgrp', JSON.stringify(v)); } catch (e) { /* ohne Speicher bleibt alles offen */ } return []; };
+const navGroups = () => { const g = new Map(); for (const l of S.navlinks || []) { const k = l.grp || ''; if (!g.has(k)) g.set(k, []); g.get(k).push(l); } return [...g.entries()].sort((a, b) => (a[0] === '') - (b[0] === '') || a[0].localeCompare(b[0])); };
+function renderNavLinks() {
+  const closed = navClosed(), link = l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" title="${esc(l.label)} – ${esc(l.url)}">` +
+    (l.icon ? `<img src="/api/icon/${esc(l.icon)}" alt="">` : NAV_LINK_ICO) + `<span class="nl">${esc(l.label)}</span>` +
+    '<svg class="ext ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M11 7H6v11h11v-5"/></svg></a>';
+  let h = '';
+  for (const [g, ls] of navGroups().sort((a, b) => (b[0] === '') - (a[0] === ''))) {
+    if (!g) { h += ls.map(link).join(''); continue; }
+    const open = !closed.includes(g);
+    h += `<button class="grp" data-grp="${esc(g)}" aria-expanded="${open}"><span>${esc(g)}</span><span class="cnt">${ls.length}</span>` +
+      `<svg class="chev ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button><div class="sub"${open ? '' : ' hidden'}>${ls.map(link).join('')}</div>`;
+  }
+  if (S.role !== 'read') h += `<button class="tool" data-act="navEdit" title="Links im Menü bearbeiten"><svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg><span class="nl">${(S.navlinks || []).length ? 'Links bearbeiten' : 'Link hinzufügen'}</span></button>`;
+  if ($('#navlinks').innerHTML !== h) $('#navlinks').innerHTML = h;
+}
+$('#navlinks').addEventListener('click', e => {
+  const g = e.target.closest('.grp');
+  if (g) { const c = new Set(navClosed()), k = g.dataset.grp; c.has(k) ? c.delete(k) : c.add(k); navClosed([...c]); renderNavLinks(); }
+  else if (e.target.closest('a,.tool')) navDrawer(false);
+});
+function navEditPanel() {
+  const row = l => `<div class="rowl">${l.icon ? `<img src="/api/icon/${esc(l.icon)}" alt="">` : NAV_LINK_ICO}<div style="min-width:0;flex:1"><b>${esc(l.label)}</b><small>${esc(l.url)}</small></div>` +
+    `<button class="btn sm" data-act="editNav" data-id="${l.id}">Ändern</button><button class="btn sm danger" data-act="delNav" data-id="${l.id}" aria-label="${esc(l.label)} löschen">×</button></div>`;
+  sel = null;
+  openPanel(`<div class="phead"><h2>Links im Menü</h2>${closeBtn}</div><div class="navedit"><p class="muted" style="margin:0 0 10px">Schnellzugriff auf Weboberflächen, z. B. Radarr oder das IPMI. ` +
+    `Links mit derselben Kategorie stehen im Menü als aufklappbare Gruppe; sie öffnen in einem neuen Tab.</p><button class="btn pri" data-act="newNav">+ Link</button>` +
+    (navGroups().sort((a, b) => (b[0] === '') - (a[0] === '')).map(([g, ls]) => `<h3>${g ? esc(g) : 'Ohne Kategorie'}</h3>` + ls.map(row).join('')).join('') || '<div class="hint" style="margin-top:12px">Noch keine Links.</div>') + '</div>', 'nav');
+}
+let navBack = false;
+function navForm(l) {
+  const isNew = !l.id, withUrl = S.devices.filter(d => d.url && /^https?:\/\//i.test(d.url)).sort((a, b) => a.name.localeCompare(b.name));
+  openForm(isNew ? 'Neuer Link' : esc(l.label), [
+    ...(isNew && withUrl.length ? [['pick', 'Aus einem Gerät übernehmen', 'select', [['', '– von Hand eintragen –'], ...withUrl.map(d => [d.id, `${d.name} · ${d.url}`])]]] : []),
+    ['label', 'Bezeichnung', 'text', 'z. B. Radarr'], ['url', 'Adresse', 'url', 'https://…'], ['grp', 'Kategorie (leer = direkt im Menü)', 'text', 'z. B. Medien, Verwaltung'],
+    ['icon', 'Icon'], ['sort', 'Reihenfolge (kleinere Zahl steht weiter oben)', 'number'],
+  ], {sort: 0, ...l}, async data => {
+    delete data.pick;
+    if (!data.label || !data.url) throw new Error('Bezeichnung und Adresse fehlen');
+    data.sort = +data.sort || 0;
+    if (isNew) await api('POST', '/api/navlinks', data); else await api('PUT', '/api/navlinks/' + l.id, data);
+    await load(true); navBack = false; setTimeout(navEditPanel, 0);
+  });
+  const f = $('form', panel), groups = navGroups().map(g => g[0]).filter(Boolean);
+  $('[name=grp]', f).setAttribute('list', 'navgrplist');
+  f.insertAdjacentHTML('beforeend', `<datalist id="navgrplist">${groups.map(g => `<option value="${esc(g)}">`).join('')}</datalist>`);
+  navBack = true;
+  if ($('[name=pick]', f)) $('[name=pick]', f).addEventListener('change', e => {
+    const d = dev(+e.target.value); if (!d) return;
+    $('[name=label]', f).value = d.name; $('[name=url]', f).value = d.url; $('[name=icon]', f).value = d.icon || '';
+    $('[name=icon]', f).dispatchEvent(new Event('input', {bubbles: true}));
+  });
+}
 const READ_OK = new Set(['monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
