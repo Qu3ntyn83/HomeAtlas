@@ -196,7 +196,11 @@ Token-ID `labvis@pve!labvis` und das Secret eintragen. Gelesen werden Nodes (CPU
 LXC-Container samt IP (bei VMs nur mit QEMU-Guest-Agent). Bereits gescannte Hosts mit gleicher IP oder
 gleichem Namen werden übernommen statt doppelt angelegt.
 
-**Docker** – pro Docker-Host einen read-only Socket-Proxy starten und `http://<host>:2375` eintragen:
+**Docker** – für den Host, auf dem LabVis selbst läuft: Anbindung „Docker" anlegen und die API-URL **leer lassen**. LabVis liest dann über
+den Docker-Socket, der in der `docker-compose.yml` eingebunden ist (`/var/run/docker.sock`). Das funktioniert neben Dockhand oder Portainer,
+die denselben Socket nutzen. LabVis liest nur; wer den Socket nicht einbinden will, entfernt die Zeile und nutzt auch lokal einen Socket-Proxy.
+
+Für alle anderen Docker-Hosts einen read-only Socket-Proxy starten und `http://<host>:2375` eintragen:
 
 ```yaml
 services:

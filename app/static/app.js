@@ -1053,7 +1053,7 @@ function renderInteg() {
     Object.entries(S.kinds).map(([k, v]) => `<button class="btn" data-act="newInteg" data-kind="${k}">+ ${esc(v.label)}</button>`).join('') +
     `<span class="grow"></span><span class="muted">Sync alle ${esc(S.settings.sync_interval_min)} min</span></div>` +
     (S.integrations.length ? `<div class="cards">${S.integrations.map(i => { const d = dev(i.device_id); const bad = (i.last_status || '').startsWith('Fehler');
-      return `<div class="box"><div class="rowl" style="border:0;padding:0"><b>${esc(S.kinds[i.kind].label)}</b><span class="muted">${esc(i.name || i.config.host || i.config.url || '')}</span>` +
+      return `<div class="box"><div class="rowl" style="border:0;padding:0"><b>${esc(S.kinds[i.kind].label)}</b><span class="muted">${esc(i.name || i.config.host || i.config.url || (i.kind === 'docker' ? 'lokaler Docker' : '') || '')}</span>` +
         `<span class="dot ${bad ? 'offline' : i.last_sync ? 'online' : ''}" style="margin-left:auto"></span></div>` +
         `<div class="muted" style="font-size:12.5px;margin:4px 0">${d ? 'Gerät: ' + esc(d.name) + ' · ' : ''}Sync vor ${ago(i.last_sync)}</div>` +
         `<div style="font-size:13px;${bad ? 'color:#ffb4ae' : ''}">${esc(i.last_status || 'noch nicht synchronisiert')}</div>` +
@@ -1064,6 +1064,7 @@ function renderInteg() {
       `<div class="muted" style="font-size:12.5px;margin:4px 0 8px">${esc(s.reason)} · liest: ${esc(s.reads)}</div>` +
       `<button class="btn sm pri" data-act="newInteg" data-kind="${esc(s.connector)}" data-dev="${d.id}" data-sug="${n}">Einrichten</button></div>`).join('')}</div>` : '') + '</div>';
 }
+const isLocal = ip => !!ip && ((S.local || {}).ips || []).includes(ip);
 function integForm(i) {
   const isNew = !i.id, k = S.kinds[i.kind];
   // Auswahl: dokumentierte Geräte und Funde aus dem Scan; passende (laut Erkennung) zuerst
@@ -1097,7 +1098,7 @@ function integForm(i) {
     const c = cands.find(x => x.v === pick.value), f = n => $(`[name=${n}]`, panel);
     if (!c) return;
     if (f('c_host')) f('c_host').value = i.kind === 'homeassistant' ? `http://${c.ip}:8123` : c.ip;
-    if (f('c_url')) f('c_url').value = `http://${c.ip}:2375`;
+    if (f('c_url')) f('c_url').value = isLocal(c.ip) ? '' : `http://${c.ip}:2375`;   // LabVis-Host selbst: über den Docker-Socket
     if (!f('name').value || f('name').dataset.auto) { f('name').value = c.name; f('name').dataset.auto = '1'; }
     f('device_id').value = c.v.startsWith('d:') ? c.v.slice(2) : '';
   });
@@ -1322,7 +1323,9 @@ const ACT = {
   restore: d => run(() => api('POST', `/api/discoveries/${d.id}/restore`)),
   newInteg: d => {
     const x = d.dev ? dev(+d.dev) : null, s = x && d.sug != null ? x.meta.suggestions[+d.sug] : null;
-    integForm({kind: d.kind, device_id: x ? x.id : '', name: x ? x.name : '', config: s ? s.config : {}});
+    const cfg = s ? {...s.config} : {};
+    if (d.kind === 'docker' && x && isLocal(x.ip)) cfg.url = '';   // der Host, auf dem LabVis läuft: Socket statt Netzwerk-API
+    integForm({kind: d.kind, device_id: x ? x.id : '', name: x ? x.name : '', config: cfg});
   },
   editInteg: d => integForm(S.integrations.find(i => i.id === +d.id)),
   delInteg: d => { if (confirm('Anbindung löschen? Bereits ausgelesene Geräte bleiben erhalten.')) run(() => api('DELETE', '/api/integrations/' + d.id)); },
