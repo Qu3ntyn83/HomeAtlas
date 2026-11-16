@@ -209,7 +209,7 @@ function folder(w, h, tabW, stroke, dash) {
     `fill="${dash ? '#0e141c' : PAL.PANEL}" stroke="${stroke}" stroke-width="1.6"${dash ? ' stroke-dasharray="9 6"' : ''}/>`;
 }
 function buildCard(d) {
-  const kids = kidsOf(d.id), hw = (d.meta && d.meta.hw) || [];
+  const kids = kidsOf(d.id), hw = [...((d.meta && d.meta.hw) || []), ...((d.meta && d.meta.hw_bmc) || [])];
   const trunk = S.links.some(l => l.trunk && (l.a_id === d.id || l.b_id === d.id));
   const col = vcol(d.vlan_id), stroke = trunk || !d.vlan_id ? PAL.TRUNKB : col;
   const type = TYPES[d.type] || d.type;
@@ -604,7 +604,7 @@ function showDevice(id, keep) {
   if (ssidsOf(id).length) h += `<h3>WLANs (${ssidsOf(id).length})</h3>` + ssidsOf(id).map(w => { const wv = vlan(w.vlan_id);
     return `<div class="rowl"><b class="mono">${esc(w.ssid)}</b>${wv ? `<span style="color:${esc(wv.color)};font-size:12px">${esc(wv.vid != null ? vtag(wv) + ' · ' + wv.name : wv.name)}</span>` : ''}` +
       `<span class="muted" style="margin-left:auto;font-size:12px">${esc([w.band, w.security].filter(Boolean).join(' · '))}</span><button class="btn sm" data-act="editWlan" data-id="${w.id}">✎</button></div>`; }).join('');
-  if ((m.hw || []).length) h += '<h3>Hardware</h3>' + m.hw.map(t => `<div class="tile"><img src="/api/icon/${esc(t.icon || 'glyph-cpu')}" alt=""><div>` +
+  if ((m.hw || []).length + (m.hw_bmc || []).length) h += '<h3>Hardware</h3>' + [...(m.hw || []), ...(m.hw_bmc || [])].map(t => `<div class="tile"><img src="/api/icon/${esc(t.icon || 'glyph-cpu')}" alt=""><div>` +
     `<span class="lab">${esc(t.label)}</span><br><b>${esc(t.value)}</b><small>${esc(t.sub)}</small></div></div>`).join('');
   if ((m.pools || []).length) h += '<h3>Storage</h3>' + m.pools.map(p => `<div class="box" style="margin-bottom:6px"><b>${esc(p.name)}</b> <span class="muted">${esc(p.layout)}</span>` +
     `<div class="bar2"><i style="width:${+p.pct || 0}%"></i></div><small class="muted">${esc(p.used)}</small></div>`).join('');

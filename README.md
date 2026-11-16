@@ -104,7 +104,9 @@ Stundenwerte 8 Tage, Ereignisse 30 Tage.
 | Titel „OPNsense" | OPNsense-API *(Connector, experimentell)* |
 | Port 8123 / Titel „Home Assistant" | Home-Assistant-API *(Connector)* |
 | Hersteller QNAP / Titel „QTS" | QNAP-API *(Connector)*: Modell, Firmware, Netzwerkkarten, Platten mit SMART-Zustand, Volumes |
-| Synology, TrueNAS, UniFi, Checkmk, FRITZ!Box, IPMI, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
+| Hersteller Synology / Ports 5000+5001 | Synology-DSM-API *(Connector)*: Modell, DSM-Version, Netzwerkkarten, Platten, Volumes |
+| Port 623 / Supermicro, iDRAC, iLO | IPMI über Redfish *(Connector)*: Mainboard, BIOS/BMC-Version, Zustand, Sensoren, Netzteile |
+| TrueNAS, UniFi, Checkmk, FRITZ!Box, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
 
 Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status aus dem Scan.
 
