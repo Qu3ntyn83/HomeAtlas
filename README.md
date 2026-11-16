@@ -192,7 +192,9 @@ pveum aclmod / -user labvis@pve -role PVEAuditor
 pveum user token add labvis@pve labvis --privsep 0
 ```
 
-Token-ID `labvis@pve!labvis` und das Secret eintragen. Gelesen werden Nodes (CPU, RAM, Version), VMs und
+Token-ID `labvis@pve!labvis` und das Secret eintragen. Wichtig ist `--privsep 0`: Ein Token mit „Privilege Separation" (Standard in der
+Weboberfläche) erbt die Rechte des Benutzers nicht und sieht dann keine Gäste. Für einen solchen Token die Rolle direkt vergeben:
+`pveum aclmod / -token 'labvis@pve!labvis' -role PVEAuditor` – LabVis erkennt den Fall und meldet ihn. Gelesen werden Nodes (CPU, RAM, Version), VMs und
 LXC-Container samt IP (bei VMs nur mit QEMU-Guest-Agent). Bereits gescannte Hosts mit gleicher IP oder
 gleichem Namen werden übernommen statt doppelt angelegt.
 
