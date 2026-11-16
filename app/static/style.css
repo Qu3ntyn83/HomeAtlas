@@ -33,8 +33,8 @@ a{color:var(--link);text-decoration:none}
 #tabs button,.sidefoot button{display:flex;align-items:center;gap:12px;width:100%;background:none;border:0;border-left:3px solid transparent;border-radius:0 8px 8px 0;
   padding:9px 10px 9px 9px;color:var(--muted);font:500 13.5px var(--sans);cursor:pointer;white-space:nowrap;text-align:left}
 #tabs button:hover,.sidefoot button:hover{color:var(--text);background:#141b25}
-#tabs button.on{color:var(--text);background:#161f2b;border-left-color:var(--accent)}
-#tabs button.on .ni{color:var(--accent)}
+#tabs button.on,.sidefoot button.on{color:var(--text);background:#161f2b;border-left-color:var(--accent)}
+#tabs button.on .ni,.sidefoot button.on .ni{color:var(--accent)}
 .nl{overflow:hidden;text-overflow:ellipsis}
 #badge,#mbadge{margin-left:auto;border-radius:9px;padding:0 6px;font:500 11px var(--mono);line-height:17px}
 #badge{background:var(--warn);color:#111}

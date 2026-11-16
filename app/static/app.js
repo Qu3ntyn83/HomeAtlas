@@ -121,12 +121,12 @@ navMin(navStore() === 'min');
 $('#collapse').addEventListener('click', () => { const min = !document.body.classList.contains('nav-min'); navMin(min); navStore(min ? 'min' : 'max'); if (view === 'topo' && S) setTimeout(fitView, 190); });
 $('#burger').addEventListener('click', () => navDrawer(true));
 $('#shade').addEventListener('click', () => navDrawer(false));
-$('#tabs').addEventListener('click', e => {
-  const b = e.target.closest('button'); if (!b) return;
+$('#side').addEventListener('click', e => {
+  const b = e.target.closest('button[data-view]'); if (!b) return;
   view = b.dataset.view;
   navDrawer(false);
   $('#crumb').textContent = $('.nl', b).textContent;
-  document.querySelectorAll('#tabs button').forEach(x => { x.classList.toggle('on', x === b); x.toggleAttribute('aria-current', x === b); });
+  document.querySelectorAll('#side button[data-view]').forEach(x => { x.classList.toggle('on', x === b); x.toggleAttribute('aria-current', x === b); });
   closePanel(); render();
 });
 
