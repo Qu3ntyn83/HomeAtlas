@@ -24,7 +24,10 @@ from . import db
 KINDS = {
     "proxmox": {"label": "Proxmox VE", "fields": [
         ["host", "Host/IP"], ["port", "Port", "8006"], ["token_id", "Token-ID (user@pve!name)"],
-        ["token_secret", "Token-Secret", "", "password"]]},
+        ["token_secret", "Token-Secret", "", "password"]],
+        "help": "Der Token braucht selbst Leserechte: Bei aktivierter „Privilege Separation“ (Standard) erbt er die Rechte des "
+                "Benutzers nicht. In Proxmox unter Datacenter → Permissions → Add → API Token Permission den Pfad „/“, den Token und "
+                "die Rolle „PVEAuditor“ eintragen (Propagate an). Ohne das meldet sich LabVis zwar an, sieht aber keine VMs und Container."},
     "docker": {"label": "Docker", "fields": [["url", "API-URL (http://host:2375) – leer = lokaler Docker auf dem LabVis-Host"]],
                "help": "Für den Docker auf dem Host, auf dem LabVis selbst läuft, das Feld leer lassen: LabVis liest dann über den "
                        "Docker-Socket. Dafür muss in der docker-compose.yml unter volumes die Zeile "
@@ -170,8 +173,23 @@ def sync_proxmox(integ):
     def px(path):
         return _get(base + path, hdr)["data"]
 
+    def rights_hint(what):
+        """Ein Token ohne eigene Rechte meldet sich an, bekommt aber leere Listen – das ist von „keine Gäste“ nicht zu unterscheiden."""
+        try:
+            perms = px("/access/permissions")
+        except Exception:  # noqa: BLE001
+            perms = None
+        if perms is not None and any(isinstance(v, dict) and v.get("VM.Audit") for v in perms.values()):
+            return None
+        tok = c.get("token_id") or ""
+        return (f"Proxmox: angemeldet, aber {what}. Dem Token {tok} fehlen eigene Leserechte: Datacenter → Permissions → Add → "
+                f"API Token Permission, Pfad „/“, Rolle „PVEAuditor“.")
+
     seen, n = set(), 0
-    for node in px("/nodes"):
+    nodes = px("/nodes")
+    if not nodes:
+        raise RuntimeError(rights_hint("es kommt kein Node zurück") or "Proxmox liefert keinen Node")
+    for node in nodes:
         nn = node["node"]
         nd = {"name": nn, "type": "hypervisor", "icon": "proxmox",
               "status": "online" if node.get("status") == "online" else "offline", "last_seen": db.now()}
@@ -224,8 +242,12 @@ def sync_proxmox(integ):
                 _upsert(integ, f"guest/{vmid}", data, adopt_ip=ip, adopt_name=g.get("name"))
                 seen.add(f"guest/{vmid}")
                 n += 1
+    if not n:
+        hint = rights_hint("es kommen keine VMs und Container zurück")
+        if hint:
+            raise RuntimeError(hint)                # vorhandene Gäste bleiben stehen, statt als verschwunden zu gelten
     _prune(integ, "guest/", seen)
-    return f"{n} Gäste"
+    return f"{len(nodes)} {'Node' if len(nodes) == 1 else 'Nodes'} · {n} Gäste"
 
 
 # ------------------------------------------------------------------ Docker
