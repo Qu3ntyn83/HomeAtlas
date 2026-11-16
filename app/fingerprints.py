@@ -88,7 +88,7 @@ def identify(h):
     # ---- NAS
     if "synology" in vendor or has("synology", "diskstation") or (ports >= {5000, 5001}):
         setk(type="nas", icon="synology", os="Synology DSM", url=web(5001 if 5001 in ports else 5000))
-        sug.append(_s("synology", "Synology DSM-API", "DSM erkannt", "Volumes, Freigaben, Belegung, Systemstatus"))
+        sug.append(_s("synology", "Synology DSM-API", "DSM erkannt", "Modell, Netzwerkkarten, Platten, Volumes, Belegung"))
     if "qnap" in vendor or has("qnap", "qts"):
         setk(type="nas", icon="qnap", os="QNAP QTS", url=web(443 if 443 in ports else 8080))
         sug.append(_s("qnap", "QNAP-API", "QNAP erkannt", "Modell, Netzwerkkarten, Platten (SMART), Volumes, Belegung"))

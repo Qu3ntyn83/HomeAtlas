@@ -39,6 +39,8 @@ CREATE TABLE IF NOT EXISTS scans(
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS wlans(
   id INTEGER PRIMARY KEY, ssid TEXT NOT NULL, vlan_id INTEGER, band TEXT, security TEXT, note TEXT, aps TEXT DEFAULT '[]');
+CREATE TABLE IF NOT EXISTS navlinks(
+  id INTEGER PRIMARY KEY, grp TEXT, label TEXT NOT NULL, url TEXT NOT NULL, icon TEXT, sort INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, pw TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'admin', created REAL, last_login REAL);
@@ -56,6 +58,7 @@ COLUMNS = {
                 "source", "ext_id", "integration_id", "ports", "meta"],
     "links": ["a_id", "b_id", "a_port", "b_port", "speed", "vlan_id", "trunk", "kind", "note", "source", "wlan_id"],
     "wlans": ["ssid", "vlan_id", "band", "security", "note", "aps"],
+    "navlinks": ["grp", "label", "url", "icon", "sort"],
     "integrations": ["kind", "name", "device_id", "config", "enabled"],
 }
 DEFAULTS = {"scan_interval_min": "60", "sync_interval_min": "15", "snmp_community": "public",

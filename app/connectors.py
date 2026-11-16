@@ -35,6 +35,17 @@ KINDS = {
         "help": "QTS kennt keine API-Schlüssel – LabVis meldet sich mit einem Benutzer an. Lege dafür am NAS einen eigenen Benutzer an "
                 "(Systemsteuerung → Benutzer), Gruppe „administrators“, ohne zweistufige Anmeldung, mit langem Zufallspasswort und "
                 "ohne Zugriff auf Freigaben. LabVis liest nur und meldet sich nach jedem Abruf wieder ab."},
+    "synology": {"label": "Synology DSM", "fields": [
+        ["host", "Host/IP oder URL (https://nas:5001)"], ["port", "Port der Weboberfläche", "5001"], ["user", "Benutzer (Administratorgruppe)"],
+        ["password", "Passwort", "", "password"]],
+        "help": "DSM kennt keine API-Schlüssel – LabVis meldet sich mit einem Benutzer an. Lege dafür in DSM einen eigenen Benutzer an "
+                "(Systemsteuerung → Benutzer & Gruppe), Gruppe „administrators“, ohne 2-Faktor-Authentifizierung, mit langem Zufallspasswort, "
+                "ohne Zugriff auf Freigaben und unter „Anwendungen“ nur DSM erlaubt. LabVis liest nur und meldet sich nach jedem Abruf wieder ab."},
+    "ipmi": {"label": "IPMI / Redfish (Supermicro, iDRAC, iLO)", "fields": [
+        ["host", "Adresse des BMC (IPMI-Anschluss)"], ["port", "Port", "443"], ["user", "Benutzer", "ADMIN"], ["password", "Passwort", "", "password"]],
+        "help": "Liest über Redfish, die HTTPS-Schnittstelle des BMC. Lege im IPMI einen eigenen Benutzer mit der Stufe „Operator“ oder "
+                "„ReadOnly“ an. Bei „Gehört zu Gerät“ den Server wählen, zu dem der BMC gehört – die IPMI-Adresse wird dann dessen "
+                "zusätzliche Adresse. Ältere Boards (z. B. Supermicro X10) brauchen dafür eine aktuelle BMC-Firmware."},
     "homeassistant": {"label": "Home Assistant", "fields": [
         ["host", "URL (http://homeassistant:8123)"], ["token", "Langlebiges Zugriffstoken", "", "password"]]},
 }
@@ -435,6 +446,70 @@ def sync_opnsense(integ):
     return f"{n} VLANs"
 
 
+# ------------------------------------------------------------------ gemeinsame Übernahme für NAS und BMC
+def apply_host(integ, info, host, kind, vendor, icon, dtype, os_name="", url="", hw_key="hw", status="online", extra_only=False):
+    """Schreibt ausgelesene Daten an ein Gerät: vorhandenes Gerät (zugeordnet, gleiche IP oder MAC) übernehmen, sonst anlegen.
+    extra_only: die gelesenen Adressen gehören zu einem Nebenanschluss (BMC) und werden nie zur Hauptadresse."""
+    nics = [n for n in info["nics"] if n["ip"] or n["mac"]]
+    main = next((n for n in nics if n["ip"] == host), None) or next((n for n in nics if n["ip"] and n["up"]), None) or \
+        next((n for n in nics if n["ip"]), None) or {"ip": host if re.match(r"^[\d.]+$", host or "") else "", "mac": "", "up": True, "name": ""}
+    dev = db.one("SELECT * FROM devices WHERE id=?", (integ.get("device_id") or 0,)) or \
+        db.one("SELECT * FROM devices WHERE integration_id=? AND ext_id=?", (integ["id"], kind))
+    for n in [main] + nics:
+        if dev:
+            break
+        dev = (db.one("SELECT * FROM devices WHERE ip=?", (n["ip"],)) if n.get("ip") else None) or \
+            (db.one("SELECT * FROM devices WHERE lower(mac)=?", (n["mac"],)) if n.get("mac") else None)
+    if not dev:
+        did = db.insert("devices", {"name": info["name"] or host, "type": dtype, "icon": icon, "ip": main["ip"], "mac": main["mac"],
+                                    "vlan_id": vlan_for_ip(main["ip"]), "source": kind, "integration_id": integ["id"], "ext_id": kind})
+        dev = db.one("SELECT * FROM devices WHERE id=?", (did,))
+    meta = dict(dev["meta"] or {})
+    # weitere Netzwerkkarten als zusätzliche Adressen; vorhandene Einträge (mit Notizen) bleiben, nur der Zustand wird gepflegt
+    addrs = [dict(a) for a in meta.get("addrs") or []]
+    own_ip = dev.get("ip") or main["ip"]
+    for n in nics:
+        if not n["ip"]:
+            continue
+        if n["ip"] == own_ip:
+            if n["up"] is not None:
+                meta["up0"] = n["up"]
+            if not meta.get("primary_label"):
+                meta["primary_label"] = n["name"]
+            continue
+        ex = next((a for a in addrs if a.get("ip") == n["ip"] or (n["mac"] and (a.get("mac") or "").lower() == n["mac"])), None)
+        if ex:
+            ex.update(ip=n["ip"], mac=n["mac"] or ex.get("mac"), **({"up": n["up"]} if n["up"] is not None else {}))
+        else:
+            addrs.append({"ip": n["ip"], "mac": n["mac"], "label": n["name"], "vlan_id": vlan_for_ip(n["ip"]),
+                          **({"up": n["up"]} if n["up"] is not None else {})})
+    if addrs:
+        meta["addrs"] = addrs
+    meta[hw_key] = info["hw"]
+    if not extra_only:
+        meta.update(ifaces=[{"idx": n["idx"], "name": n["name"], "alias": n["ip"], "up": n["up"] if n["up"] is not None else bool(n["ip"]), "speed": n.get("speed") or "1G"} for n in nics],
+                    pools=info.get("pools") or [])
+    if info.get("serial"):
+        meta["serial"] = info["serial"]
+    upd = {"meta": meta, "last_seen": db.now()}
+    if status:
+        upd["status"] = status
+    if os_name:
+        upd["os"] = os_name
+    if not dev.get("integration_id") and not extra_only:   # ein Gerät, das schon einer anderen Anbindung gehört (Proxmox), bleibt dort
+        upd.update(integration_id=integ["id"], ext_id=kind)
+    for k, v in (("hostname", "" if extra_only else info["name"]), ("model", info["model"]), ("vendor", vendor), ("icon", icon), ("ip", main["ip"]),
+                 ("mac", main["mac"] if (dev.get("ip") or main["ip"]) == main["ip"] else ""),
+                 ("url", url), ("vlan_id", vlan_for_ip(main["ip"]))):
+        if v and not dev.get(k):
+            upd[k] = v
+    if dev["type"] in ("other", "", None) or (dtype == "nas" and dev["type"] == "server"):
+        upd["type"] = dtype
+    db.update("devices", dev["id"], upd)
+    db.update("integrations", integ["id"], {"device_id": dev["id"]})
+    return dev, nics
+
+
 # ------------------------------------------------------------------ QNAP
 # QTS hat keine API-Schlüssel: Anmeldung mit Benutzer und Passwort liefert eine Sitzungs-ID, die nach dem Abruf wieder
 # abgemeldet wird. Die Antworten sind XML.
@@ -551,57 +626,229 @@ def sync_qnap(integ):
         except RuntimeError:
             pass
 
-    nics = [n for n in info["nics"] if n["ip"] or n["mac"]]
-    main = next((n for n in nics if n["ip"] == host), None) or next((n for n in nics if n["ip"] and n["up"]), None) or \
-        next((n for n in nics if n["ip"]), None) or {"ip": host if re.match(r"^[\d.]+$", host or "") else "", "mac": "", "up": True, "name": ""}
-    dev = db.one("SELECT * FROM devices WHERE id=?", (integ.get("device_id") or 0,)) or \
-        db.one("SELECT * FROM devices WHERE integration_id=? AND ext_id='nas'", (integ["id"],))
-    for n in [main] + nics:
-        if dev:
-            break
-        dev = (db.one("SELECT * FROM devices WHERE ip=?", (n["ip"],)) if n.get("ip") else None) or \
-            (db.one("SELECT * FROM devices WHERE lower(mac)=?", (n["mac"],)) if n.get("mac") else None)
-    if not dev:
-        did = db.insert("devices", {"name": info["name"] or host, "type": "nas", "icon": "qnap", "ip": main["ip"], "mac": main["mac"],
-                                    "vlan_id": vlan_for_ip(main["ip"]), "source": "qnap", "integration_id": integ["id"], "ext_id": "nas"})
-        dev = db.one("SELECT * FROM devices WHERE id=?", (did,))
-    meta = dict(dev["meta"] or {})
-    # weitere Netzwerkkarten als zusätzliche Adressen; vorhandene Einträge (mit Notizen) bleiben, nur der Zustand wird gepflegt
-    addrs = [dict(a) for a in meta.get("addrs") or []]
-    own_ip = dev.get("ip") or main["ip"]
-    for n in nics:
-        if not n["ip"]:
-            continue
-        if n["ip"] == own_ip:
-            meta["up0"] = n["up"]
-            if not meta.get("primary_label"):
-                meta["primary_label"] = n["name"]
-            continue
-        ex = next((a for a in addrs if a.get("ip") == n["ip"] or (n["mac"] and (a.get("mac") or "").lower() == n["mac"])), None)
-        if ex:
-            ex.update(up=n["up"], ip=n["ip"], mac=n["mac"] or ex.get("mac"))
-        else:
-            addrs.append({"ip": n["ip"], "mac": n["mac"], "label": n["name"], "up": n["up"], "vlan_id": vlan_for_ip(n["ip"])})
-    if addrs:
-        meta["addrs"] = addrs
-    meta.update(ifaces=[{"idx": n["idx"], "name": n["name"], "alias": n["ip"], "up": n["up"], "speed": n["speed"]} for n in nics],
-                hw=info["hw"], pools=info["pools"])
-    if info["serial"]:
-        meta["serial"] = info["serial"]
-    upd = {"meta": meta, "status": "online", "last_seen": db.now(), "os": f"{info['platform']} {info['fw']}".strip(),
-           "integration_id": integ["id"], "ext_id": "nas"}
-    for k, v in (("hostname", info["name"]), ("model", info["model"]), ("vendor", "QNAP"), ("icon", "qnap"), ("ip", main["ip"]),
-                 ("mac", main["mac"] if (dev.get("ip") or main["ip"]) == main["ip"] else ""),
-                 ("url", f"{scheme}://{host}:{port}"), ("vlan_id", vlan_for_ip(main["ip"]))):
-        if v and not dev.get(k):
-            upd[k] = v
-    if dev["type"] in ("other", "server", "", None):
-        upd["type"] = "nas"
-    db.update("devices", dev["id"], upd)
-    db.update("integrations", integ["id"], {"device_id": dev["id"]})
+    dev, nics = apply_host(integ, info, host, kind="qnap", vendor="QNAP", icon="qnap", dtype="nas",
+                           os_name=f"{info['platform']} {info['fw']}".strip(), url=f"{scheme}://{host}:{port}")
     disks = sum(1 for h in info["hw"] if h["label"].startswith("SCHACHT"))
     warn = f" · ⚠ {info['bad_disks']} Platte(n) mit SMART-Warnung" if info["bad_disks"] else ""
     return f"{info['name'] or host} · {info['model']} · {len(nics)} Netzwerkkarten, {disks} Platten, {len(info['pools'])} Volumes{warn}"
+
+
+# ------------------------------------------------------------------ Synology
+SYNO_ERR = {400: "Benutzer oder Passwort falsch", 401: "das Konto ist deaktiviert", 402: "dem Benutzer fehlt die Berechtigung für DSM",
+            403: "für diesen Benutzer ist die 2-Faktor-Authentifizierung aktiv – dafür einen eigenen Benutzer ohne 2FA anlegen",
+            404: "für diesen Benutzer ist die 2-Faktor-Authentifizierung aktiv – dafür einen eigenen Benutzer ohne 2FA anlegen",
+            406: "DSM erzwingt 2-Faktor-Authentifizierung für dieses Konto – in DSM für den LabVis-Benutzer ausnehmen",
+            407: "DSM hat die Adresse von LabVis nach Fehlversuchen gesperrt (Systemsteuerung → Sicherheit → Konto)",
+            408: "das Passwort ist abgelaufen", 409: "das Passwort ist abgelaufen", 410: "das Passwort muss erst geändert werden"}
+RAID = {"raid_1": "RAID 1", "raid_5": "RAID 5", "raid_6": "RAID 6", "raid_10": "RAID 10", "raid_0": "RAID 0", "basic": "Basic",
+        "shr_without_disk_protect": "SHR (ohne Schutz)", "shr_with_1_disk_protect": "SHR", "shr_with_2_disk_protect": "SHR-2", "jbod": "JBOD"}
+
+
+def synology_parse(dsm, net, storage=None, system=None):
+    """JSON-Antworten → Gerätedaten. Getrennt vom Abruf, damit es testbar bleibt."""
+    system, storage = system or {}, storage or {}
+    out = {"name": net.get("hostname") or "", "model": dsm.get("model") or system.get("model") or "", "serial": dsm.get("serial") or "",
+           "fw": dsm.get("version_string") or system.get("firmware_ver") or "", "nics": [], "hw": [], "pools": [], "bad_disks": 0}
+    for n, i in enumerate(net.get("interfaces") or [], 1):
+        ips = i.get("ip") or []
+        ip = (ips[0].get("address") if ips and isinstance(ips[0], dict) else ips[0] if ips and isinstance(ips, list) else ips if isinstance(ips, str) else "") or ""
+        if i.get("type") in ("lo", "tunnel", "ovs") or (i.get("id") or "").startswith(("lo", "docker", "sit", "tun")):
+            continue
+        iid = i.get("id") or ""
+        m = re.match(r"^(?:ovs_)?(eth|bond)(\d+)$", iid)
+        name = f"{'LAN' if m.group(1) == 'eth' else 'Bond'} {int(m.group(2)) + 1}" if m else (iid or f"LAN {n}")
+        out["nics"].append({"idx": n, "name": name, "ip": ip if ip and not ip.startswith("169.254.") else "",
+                            "mac": (i.get("mac") or "").lower().replace("-", ":"), "up": None, "speed": "1G"})
+    cpu = " ".join(x for x in (system.get("cpu_vendor"), system.get("cpu_family"), system.get("cpu_series")) if x)
+    if cpu:
+        out["hw"].append({"icon": "glyph-cpu", "label": "CPU", "value": cpu, "sub": f"{system.get('cpu_cores')} Kerne" if system.get("cpu_cores") else ""})
+    ram = dsm.get("ram") or system.get("ram_size")
+    if ram:
+        out["hw"].append({"icon": "glyph-ram", "label": "MEMORY", "value": f"{round(int(ram) / 1024) or 1} GB" if int(ram) >= 1024 else f"{ram} MB",
+                          "sub": f"System {dsm.get('temperature')} °C" if dsm.get("temperature") else ""})
+    for d in storage.get("disks") or []:
+        state, smart = d.get("status") or "", d.get("smart_status") or ""
+        ok = state in ("normal", "") and smart in ("normal", "safe", "")
+        out["bad_disks"] += 0 if ok else 1
+        ssd = d.get("isSsd") or d.get("diskType") in ("SSD", "M.2 NVMe", "NVMe")
+        try:
+            size = _size(d.get("size_total"))
+        except (TypeError, ValueError):
+            size = ""
+        out["hw"].append({"icon": "glyph-ssd" if ssd else "glyph-hdd", "label": (d.get("name") or d.get("id") or "Platte").upper().replace("DRIVE", "SCHACHT").replace("LAUFWERK", "SCHACHT"),
+                          "value": f"{(d.get('vendor') or '').strip()} {(d.get('model') or '').strip()} {size}".strip(),
+                          "sub": " · ".join(x for x in ("Zustand " + (state if ok else f"{state}/{smart}") if state else "", f"{d['temp']} °C" if d.get("temp") else "", d.get("serial") or "") if x)})
+    for v in storage.get("volumes") or []:
+        try:
+            total, used = float(v["size"]["total"]), float(v["size"]["used"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if total <= 0:
+            continue
+        num = re.sub(r"\D", "", v.get("id") or "")
+        layout = " · ".join(x for x in (RAID.get(v.get("device_type"), v.get("device_type") or ""), v.get("fs_type") or "",
+                                        "" if v.get("status") in ("normal", None) else "⚠ " + v["status"]) if x)
+        out["pools"].append({"name": v.get("display_name") or (f"Volume {num}" if num else v.get("id") or "Volume"), "layout": layout,
+                             "pct": round(used / total * 100), "used": f"{_size(used)} von {_size(total)} belegt"})
+        out["bad_disks"] += 0 if v.get("status") in ("normal", None) else 1
+    return out
+
+
+def sync_synology(integ):
+    c = integ["config"]
+    raw = (c.get("host") or "").strip()
+    scheme, host, port = endpoint(c, 5001)
+    if "://" not in raw and str(port) in ("5000", "80"):        # 5000 ist bei Synology der unverschlüsselte Standardport
+        scheme = "http"
+    if not c.get("user") or not c.get("password"):
+        raise RuntimeError("Benutzer und Passwort fehlen")
+    reach(host, port)
+    base = f"{scheme}://{host}:{port}/webapi/"
+    apis, sid = {}, ""
+
+    def call(api, method, post=False, **params):
+        a = apis.get(api) or {"path": "query.cgi" if api == "SYNO.API.Info" else "entry.cgi", "maxVersion": 1}
+        q = {"api": api, "version": min(int(a.get("maxVersion") or 1), params.pop("maxv", 99)), "method": method, **params}
+        if sid:
+            q["_sid"] = sid
+        enc = urllib.parse.urlencode(q)
+        req = urllib.request.Request(base + a["path"] + ("" if post else "?" + enc), data=enc.encode() if post else None)
+        try:
+            with _OPENER.open(req, timeout=25) as r:
+                return json.loads(r.read().decode())
+        except json.JSONDecodeError:
+            raise RuntimeError("Synology: unerwartete Antwort – ist das die DSM-Oberfläche (Port prüfen)?") from None
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(explain(e, "Synology")) from None
+
+    def data(api, method, **params):
+        r = call(api, method, **params)
+        if not r.get("success"):
+            raise RuntimeError(f"Synology: {api} abgelehnt (Fehler {(r.get('error') or {}).get('code')})")
+        return r.get("data") or {}
+
+    apis.update(data("SYNO.API.Info", "query", query="SYNO.API.Auth,SYNO.DSM.Info,SYNO.DSM.Network,SYNO.Storage.CGI.Storage,SYNO.Core.System"))
+    if "SYNO.API.Auth" not in apis:
+        raise RuntimeError("Synology: Anmelde-Schnittstelle nicht gefunden – ist das ein Synology-NAS?")
+    login = call("SYNO.API.Auth", "login", post=True, maxv=6, account=c["user"].strip(), passwd=c["password"], session="LabVis", format="sid")
+    if not login.get("success"):
+        code = (login.get("error") or {}).get("code")
+        raise RuntimeError("Synology: Anmeldung abgelehnt – " + SYNO_ERR.get(code, f"Fehler {code}"))
+    sid = login["data"]["sid"]
+    try:
+        try:
+            dsm, net = data("SYNO.DSM.Info", "getinfo"), data("SYNO.DSM.Network", "list")
+        except RuntimeError as e:
+            if "Fehler 105" in str(e) or "Fehler 119" in str(e):
+                raise RuntimeError("Synology: angemeldet, aber ohne Zugriff auf die Systeminformationen – der Benutzer muss zur Administratorgruppe gehören") from None
+            raise
+        extra = []
+        for api, method, kw in (("SYNO.Storage.CGI.Storage", "load_info", {}), ("SYNO.Core.System", "info", {})):
+            try:
+                extra.append(data(api, method, **kw))
+            except RuntimeError:
+                extra.append(None)
+        info = synology_parse(dsm, net, *extra)
+    finally:
+        try:
+            call("SYNO.API.Auth", "logout", maxv=6, session="LabVis")
+        except RuntimeError:
+            pass
+    dev, nics = apply_host(integ, info, host, kind="synology", vendor="Synology", icon="synology", dtype="nas",
+                           os_name=info["fw"] if info["fw"].startswith("DSM") else f"DSM {info['fw']}".strip(), url=f"{scheme}://{host}:{port}")
+    disks = sum(1 for h in info["hw"] if h["icon"] in ("glyph-hdd", "glyph-ssd"))
+    warn = f" · ⚠ {info['bad_disks']} Warnung(en) bei Platten/Volumes" if info["bad_disks"] else ""
+    miss = "" if extra[0] is not None else " · Speicher nicht lesbar (Administratorrechte nötig)"
+    return f"{info['name'] or host} · {info['model']} · {len(nics)} Netzwerkkarten, {disks} Platten, {len(info['pools'])} Volumes{warn}{miss}"
+
+
+# ------------------------------------------------------------------ IPMI / Redfish
+def redfish_parse(system, manager=None, nic=None, thermal=None, power=None):
+    system, manager, nic, thermal, power = (x or {} for x in (system, manager, nic, thermal, power))
+    health = (system.get("Status") or {}).get("HealthRollup") or (system.get("Status") or {}).get("Health") or ""
+    ip = next((a.get("Address") for a in nic.get("IPv4Addresses") or [] if a.get("Address") and a["Address"] != "0.0.0.0"), "")
+    board = " ".join(x for x in ((system.get("Manufacturer") or "").strip(), (system.get("Model") or "").strip()) if x)
+    out = {"name": system.get("HostName") or "", "model": board, "serial": (system.get("SerialNumber") or "").strip(), "health": health,
+           "power": system.get("PowerState") or "", "hw": [], "warn": [],
+           "nics": [{"idx": 1, "name": "IPMI", "ip": ip, "mac": (nic.get("MACAddress") or "").lower().replace("-", ":"), "up": True}] if (ip or nic.get("MACAddress")) else []}
+    out["hw"].append({"icon": "glyph-board", "label": "MAINBOARD", "value": board or "unbekannt",
+                      "sub": " · ".join(x for x in ("BIOS " + system["BiosVersion"] if system.get("BiosVersion") else "",
+                                                    "BMC " + manager["FirmwareVersion"] if manager.get("FirmwareVersion") else "",
+                                                    "SN " + out["serial"] if out["serial"] else "") if x)})
+    watts = next((p.get("PowerConsumedWatts") for p in power.get("PowerControl") or [] if p.get("PowerConsumedWatts")), None)
+    temps = [(t.get("Name") or "", t.get("ReadingCelsius")) for t in thermal.get("Temperatures") or [] if isinstance(t.get("ReadingCelsius"), (int, float))]
+    cpu_t = [v for n, v in temps if "cpu" in n.lower()]
+    fans = [f for f in thermal.get("Fans") or [] if isinstance(f.get("Reading"), (int, float)) and f["Reading"] > 0]
+    psus = [p for p in power.get("PowerSupplies") or [] if (p.get("Status") or {}).get("State") != "Absent"]
+    for group, items in (("Temperatur", thermal.get("Temperatures") or []), ("Lüfter", thermal.get("Fans") or []), ("Netzteil", psus)):
+        for x in items:
+            st = x.get("Status") or {}
+            if st.get("State") == "Enabled" and st.get("Health") not in ("OK", None, ""):
+                out["warn"].append(f"{group} {x.get('Name') or ''}: {st['Health']}".strip())
+    sensors = " · ".join(x for x in (f"CPU {max(cpu_t):.0f} °C" if cpu_t else f"max. {max(v for _, v in temps):.0f} °C" if temps else "",
+                                     f"{len(fans)} Lüfter" if fans else "", f"{watts:.0f} W" if watts else "") if x)
+    out["hw"].append({"icon": "glyph-shield", "label": "ZUSTAND", "value": {"OK": "In Ordnung", "Warning": "Warnung", "Critical": "Kritisch"}.get(health, health or "unbekannt")
+                      + ({"On": "", "Off": " · ausgeschaltet"}.get(out["power"], "")), "sub": sensors})
+    for n, p in enumerate(psus, 1):
+        out["hw"].append({"icon": "glyph-psu", "label": f"NETZTEIL {n}", "value": (p.get("Model") or p.get("Name") or "Netzteil").strip(),
+                          "sub": " · ".join(x for x in (f"{p['PowerCapacityWatts']:.0f} W" if isinstance(p.get("PowerCapacityWatts"), (int, float)) else "",
+                                                        (p.get("Status") or {}).get("Health") or "") if x)})
+    return out
+
+
+def sync_ipmi(integ):
+    c = integ["config"]
+    scheme, host, port = endpoint(c, 443)
+    if not c.get("user") or not c.get("password"):
+        raise RuntimeError("Benutzer und Passwort fehlen")
+    reach(host, port)
+    base = f"{scheme}://{host}:{port}"
+    hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['user'].strip()}:{c['password']}".encode()).decode(), "Accept": "application/json"}
+
+    def get(path):
+        return _get(base + path, hdr, timeout=25)
+
+    def first(coll):                                  # Sammlung → erster Eintrag
+        if not coll:
+            return None
+        m = (get(coll["@odata.id"]).get("Members") or [])
+        return get(m[0]["@odata.id"]) if m else None
+
+    def soft(fn):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001 – Sensoren und Netzteile sind Zugabe
+            return None
+
+    try:
+        root = get("/redfish/v1/")
+        system = first(root.get("Systems"))
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise RuntimeError("IPMI: Anmeldung abgelehnt – Benutzer/Passwort prüfen (Groß-/Kleinschreibung zählt, Supermicro-Standard ist ADMIN)") from None
+        if e.code == 404:
+            raise RuntimeError("IPMI: Dieser BMC bietet kein Redfish an – die BMC-Firmware ist dafür zu alt, bitte aktualisieren") from None
+        raise RuntimeError(explain(e, "IPMI")) from None
+    except json.JSONDecodeError:
+        raise RuntimeError("IPMI: unerwartete Antwort – ist das die Adresse des BMC?") from None
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(explain(e, "IPMI")) from None
+    if not system:
+        raise RuntimeError("IPMI: Der BMC meldet kein System")
+    manager = soft(lambda: first(root.get("Managers")))
+    nic = soft(lambda: first(manager.get("EthernetInterfaces"))) if manager else None
+    chassis = soft(lambda: first(root.get("Chassis")))
+    thermal = soft(lambda: get(chassis["Thermal"]["@odata.id"])) if chassis and chassis.get("Thermal") else None
+    power = soft(lambda: get(chassis["Power"]["@odata.id"])) if chassis and chassis.get("Power") else None
+    info = redfish_parse(system, manager, nic, thermal, power)
+    if not info["nics"] and re.match(r"^[\d.]+$", host or ""):
+        info["nics"] = [{"idx": 1, "name": "IPMI", "ip": host, "mac": "", "up": True}]
+    vendor = (system.get("Manufacturer") or "").strip()
+    # der BMC antwortet auch bei ausgeschaltetem Server: Status nur setzen, wenn er eindeutig ist und das Gerät sonst keinen hat
+    dev, _ = apply_host(integ, info, host, kind="ipmi", vendor=vendor, icon="supermicro" if "supermicro" in vendor.lower() else "",
+                        dtype="server", hw_key="hw_bmc", status="offline" if info["power"] == "Off" else "", extra_only=True, url="")
+    warn = " · ⚠ " + "; ".join(info["warn"][:3]) if info["warn"] else ""
+    return f"{dev['name']} · {info['model'] or 'BMC'} · Zustand {info['health'] or '?'}, {info['power'] or '?'}{warn}"
 
 
 # ------------------------------------------------------------------ Home Assistant
@@ -770,7 +1017,7 @@ def sync_homeassistant(integ):
     return f"{new} neu, {upd} aktualisiert, {linked} mit vorhandenen Geräten verknüpft ({', '.join(sorted(chosen))})"
 
 
-SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap,
+SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap, "synology": sync_synology, "ipmi": sync_ipmi,
         "homeassistant": sync_homeassistant}
 
 

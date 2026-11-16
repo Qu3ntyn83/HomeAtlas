@@ -18,7 +18,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.15.0"
+VERSION = "0.17.1"
 
 
 def _build_id():
@@ -50,7 +50,7 @@ def _page(name):
                     headers={"Cache-Control": "no-store"})
 
 
-TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans")
+TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans", "navlinks")
 MASK = "••••••••"
 SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if len(f) > 3 and f[3] == "password"}
 
@@ -100,6 +100,7 @@ def state(request: Request):
         "devices": db.q("SELECT * FROM devices ORDER BY id"),
         "links": db.q("SELECT * FROM links ORDER BY id"),
         "wlans": db.q("SELECT * FROM wlans ORDER BY ssid COLLATE NOCASE"),
+        "navlinks": db.q("SELECT * FROM navlinks ORDER BY sort, label COLLATE NOCASE"),
         "checks": monitor.light(),
         "discoveries": db.q("SELECT * FROM discoveries ORDER BY state='ignored', last_seen DESC"),
         "integrations": [_mask(i) for i in db.q("SELECT * FROM integrations ORDER BY id")],
@@ -112,9 +113,17 @@ def state(request: Request):
 
 def _clean(table, data):
     data = {k: (None if v == "" else v) for k, v in data.items() if k in db.COLUMNS[table]}
-    for k in ("vid", "units", "vlan_id", "parent_id", "rack_id", "rack_u", "rack_height", "a_id", "b_id", "device_id", "wlan_id"):
+    for k in ("vid", "units", "vlan_id", "parent_id", "rack_id", "rack_u", "rack_height", "a_id", "b_id", "device_id", "wlan_id", "sort"):
         if data.get(k) is not None:
             data[k] = int(data[k])
+    if table == "navlinks":
+        for k in ("label", "url", "grp"):
+            if isinstance(data.get(k), str):
+                data[k] = data[k].strip() or None
+        if "url" in data and not re.match(r"^https?://[^\s/]+", data.get("url") or "", re.I):
+            raise HTTPException(400, "Die Adresse muss mit http:// oder https:// beginnen")
+        if "label" in data and not data.get("label"):
+            raise HTTPException(400, "Bezeichnung fehlt")
     return data
 
 
@@ -123,6 +132,8 @@ def create(table: str, data: dict = Body(...)):
     if table not in TABLES:
         raise HTTPException(404)
     data = _clean(table, data)
+    if table == "navlinks" and not (data.get("label") and data.get("url")):
+        raise HTTPException(400, "Bezeichnung und Adresse fehlen")
     if table == "integrations":
         key = lambda c: ((c.get("host") or c.get("url") or "").strip().lower(), str(c.get("port") or ""))   # noqa: E731
         if key(data.get("config") or {})[0] and any(i["kind"] == data.get("kind") and key(i["config"] or {}) == key(data["config"])
@@ -175,7 +186,7 @@ def remove(table: str, rid: int):
     elif table == "integrations":
         db.x("UPDATE devices SET integration_id=NULL, ext_id=NULL WHERE integration_id=?", (rid,))
         db.x("DELETE FROM integrations WHERE id=?", (rid,))
-    elif table in ("links", "discoveries"):
+    elif table in ("links", "discoveries", "navlinks"):
         db.x(f"DELETE FROM {table} WHERE id=?", (rid,))
     else:
         raise HTTPException(404)
@@ -437,7 +448,7 @@ def export():
 
 @app.post("/api/restore/all")
 def restore(data: dict = Body(...)):
-    if not all(t in data for t in TABLES if t != "wlans"):   # ältere Exporte kennen noch keine WLANs
+    if not all(t in data for t in TABLES if t not in ("wlans", "navlinks")):   # ältere Exporte kennen noch keine WLANs und Menü-Links
         raise HTTPException(400, "Kein LabVis-Export")
     with db.conn() as c:
         for t in TABLES:

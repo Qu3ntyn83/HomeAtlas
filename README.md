@@ -60,7 +60,8 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 ## Bereiche
 
 Das Menü steht links und lässt sich auf eine Symbolleiste einklappen (der Browser merkt sich die Wahl); auf dem Handy öffnet es sich
-als Schublade über das Menü-Symbol. Über „Zum Startbildschirm hinzufügen" lässt sich LabVis mit eigenem Symbol wie eine App ablegen.
+als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links** – etwa zu Radarr oder zum IPMI –, auf Wunsch in aufklappbaren Kategorien
+(„Links bearbeiten" im Menü; Adresse und Icon lassen sich aus einem dokumentierten Gerät übernehmen). Über „Zum Startbildschirm hinzufügen" lässt sich LabVis mit eigenem Symbol wie eine App ablegen.
 
 | Bereich | Inhalt |
 |---|---|
@@ -104,7 +105,9 @@ Stundenwerte 8 Tage, Ereignisse 30 Tage.
 | Titel „OPNsense" | OPNsense-API *(Connector, experimentell)* |
 | Port 8123 / Titel „Home Assistant" | Home-Assistant-API *(Connector)* |
 | Hersteller QNAP / Titel „QTS" | QNAP-API *(Connector)*: Modell, Firmware, Netzwerkkarten, Platten mit SMART-Zustand, Volumes |
-| Synology, TrueNAS, UniFi, Checkmk, FRITZ!Box, IPMI, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
+| Hersteller Synology / Ports 5000+5001 | Synology-DSM-API *(Connector)*: Modell, DSM-Version, Netzwerkkarten, Platten, Volumes |
+| Port 623 / Supermicro, iDRAC, iLO | IPMI über Redfish *(Connector)*: Mainboard, BIOS/BMC-Version, Zustand, Sensoren, Netzteile |
+| TrueNAS, UniFi, Checkmk, FRITZ!Box, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
 
 Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status aus dem Scan.
 
