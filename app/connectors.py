@@ -6,6 +6,7 @@ snmp     – v2c über die net-snmp-Werkzeuge: Ports, Geschwindigkeit, PVID, LLD
 opnsense – API-Key/Secret: VLANs und Subnetze (experimentell)
 """
 import base64
+import http.client
 import ipaddress
 import json
 import re
@@ -24,10 +25,14 @@ KINDS = {
     "proxmox": {"label": "Proxmox VE", "fields": [
         ["host", "Host/IP"], ["port", "Port", "8006"], ["token_id", "Token-ID (user@pve!name)"],
         ["token_secret", "Token-Secret", "", "password"]]},
-    "docker": {"label": "Docker", "fields": [["url", "API-URL (http://host:2375)"]]},
+    "docker": {"label": "Docker", "fields": [["url", "API-URL (http://host:2375) – leer = lokaler Docker auf dem LabVis-Host"]],
+               "help": "Für den Docker auf dem Host, auf dem LabVis selbst läuft, das Feld leer lassen: LabVis liest dann über den "
+                       "Docker-Socket. Dafür muss in der docker-compose.yml unter volumes die Zeile "
+                       "„- /var/run/docker.sock:/var/run/docker.sock:ro“ stehen (in der aktuellen Vorlage enthalten). "
+                       "Für andere Hosts die Adresse einer freigegebenen Docker-API oder eines docker-socket-proxy eintragen."},
     "snmp": {"label": "SNMP v2c", "fields": [["host", "Host/IP"], ["community", "Community", "public", "password"]]},
     "opnsense": {"label": "OPNsense (experimentell)", "fields": [
-        ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche", "443"], ["key", "API-Key"],
+        ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche (80 = ohne TLS)", "443"], ["key", "API-Key"],
         ["secret", "API-Secret", "", "password"]]},
     "qnap": {"label": "QNAP QTS / QuTS hero", "fields": [
         ["host", "Host/IP oder URL (https://nas:443)"], ["port", "Port der Weboberfläche", "443"], ["user", "Benutzer (Administratorgruppe)"],
@@ -105,7 +110,10 @@ def endpoint(cfg, default_port, scheme="https"):
         u = urllib.parse.urlparse(raw)
         return u.scheme, u.hostname, u.port or cfg.get("port") or (443 if u.scheme == "https" else 80)
     host, _, p = raw.partition(":")
-    return scheme, host, p or cfg.get("port") or default_port
+    port = p or cfg.get("port") or default_port
+    if str(port).strip() == "80":                    # Port 80 ist unverschlüsselt – auch ohne http:// davor
+        scheme = "http"
+    return scheme, host, port
 
 
 def vlan_for_ip(ip):
@@ -233,20 +241,89 @@ def icon_from_image(image):
     return "docker"
 
 
+DOCKER_SOCK = "/var/run/docker.sock"
+
+
+def _unix_get(sock_path, path, timeout=15):
+    """HTTP-GET über einen Unix-Socket (lokaler Docker)."""
+    conn = http.client.HTTPConnection("localhost", timeout=timeout)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(timeout)
+    try:
+        s.connect(sock_path)
+    except FileNotFoundError:
+        raise RuntimeError(f"Docker-Socket {sock_path} fehlt im LabVis-Container. In der docker-compose.yml unter volumes "
+                           f"„- /var/run/docker.sock:/var/run/docker.sock:ro“ ergänzen und „docker compose up -d“ ausführen") from None
+    except PermissionError:
+        raise RuntimeError(f"Kein Zugriff auf {sock_path} – der LabVis-Container muss als root laufen (Standard)") from None
+    except OSError as e:
+        raise RuntimeError(f"Docker-Socket {sock_path} antwortet nicht ({e.strerror or e}) – läuft Docker auf dem Host?") from None
+    conn.sock = s
+    try:
+        conn.request("GET", path, headers={"Host": "docker"})
+        r = conn.getresponse()
+        body = r.read()
+        if r.status >= 400:
+            raise RuntimeError(f"Docker: HTTP-Fehler {r.status}")
+        return json.loads(body.decode())
+    finally:
+        conn.close()
+
+
+def local_ips():
+    """IPv4-Adressen des LabVis-Hosts (der Container läuft im Host-Netz), die Hauptadresse zuerst."""
+    out = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("192.0.2.1", 9))                   # sendet nichts, liefert nur die Absenderadresse der Standardroute
+        out.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        r = subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, timeout=5)
+        for ln in r.stdout.splitlines():
+            m = re.search(r"^\d+:\s+(\S+)\s+inet\s+([\d.]+)/", ln)
+            if m and not m.group(1).startswith(("docker", "br-", "veth", "virbr", "cni", "flannel", "tailscale")) and m.group(2) not in out:
+                out.append(m.group(2))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return [i for i in out if not i.startswith("127.")]
+
+
 def sync_docker(integ):
     c = integ["config"]
-    url = c["url"].rstrip("/")
-    pu = urllib.parse.urlparse(url)
-    host = pu.hostname
-    reach(host, pu.port or (443 if pu.scheme == "https" else 80))
+    url = (c.get("url") or "").strip().rstrip("/")
+    local = url.lower() in ("", "local", "lokal") or url.startswith("unix://")
     parent = integ.get("device_id")
-    if not parent or not db.one("SELECT id FROM devices WHERE id=?", (parent,)):
-        d = db.one("SELECT id FROM devices WHERE ip=?", (host,))
-        parent = d["id"] if d else db.insert("devices", {"name": host, "ip": host, "type": "server", "icon": "docker",
-                                                          "vlan_id": vlan_for_ip(host)})
+    if parent and not db.one("SELECT id FROM devices WHERE id=?", (parent,)):
+        parent = None
+    if local:
+        sock = url[7:] if url.startswith("unix://") else DOCKER_SOCK
+        get = lambda p: _unix_get(sock, p)            # noqa: E731
+        info = get("/info")
+        ips = local_ips()
+        if not parent:
+            d = next((x for x in (db.one("SELECT id FROM devices WHERE ip=?", (i,)) for i in ips) if x), None) or \
+                (db.one("SELECT id FROM devices WHERE lower(name)=? OR lower(hostname)=?", ((info.get("Name") or "").lower(),) * 2) if info.get("Name") else None)
+            parent = d["id"] if d else db.insert("devices", {"name": info.get("Name") or "Docker-Host", "ip": ips[0] if ips else None, "type": "server",
+                                                              "icon": "docker", "vlan_id": vlan_for_ip(ips[0]) if ips else None})
+        host = (db.one("SELECT ip FROM devices WHERE id=?", (parent,)) or {}).get("ip") or (ips[0] if ips else "localhost")
+    else:
+        pu = urllib.parse.urlparse(url)
+        host = pu.hostname
+        if not host:
+            raise RuntimeError("Die API-URL muss mit http:// oder https:// beginnen – oder leer bleiben für den lokalen Docker")
+        reach(host, pu.port or (443 if pu.scheme == "https" else 80))
+        get = lambda p: _get(url + p)                 # noqa: E731
+        if not parent:
+            d = db.one("SELECT id FROM devices WHERE ip=?", (host,))
+            parent = d["id"] if d else db.insert("devices", {"name": host, "ip": host, "type": "server", "icon": "docker",
+                                                              "vlan_id": vlan_for_ip(host)})
+    if parent != integ.get("device_id"):
         db.update("integrations", integ["id"], {"device_id": parent})
     seen = set()
-    for ct in _get(url + "/containers/json?all=1"):
+    for ct in get("/containers/json?all=1"):
         name = (ct.get("Names") or ["/?"])[0].lstrip("/")
         pub = sorted({p["PublicPort"] for p in ct.get("Ports", []) if p.get("PublicPort")})
         labels = ct.get("Labels") or {}
@@ -260,7 +337,7 @@ def sync_docker(integ):
         seen.add(f"ctr/{name}")
     _prune(integ, "ctr/", seen)
     db.update("devices", parent, {"status": "online", "last_seen": db.now()})
-    return f"{len(seen)} Container"
+    return f"{len(seen)} Container" + (" · lokaler Docker" if local else "")
 
 
 # ------------------------------------------------------------------ SNMP
@@ -399,8 +476,16 @@ def sync_opnsense(integ):
     if not c.get("key") or not c.get("secret"):
         raise RuntimeError("API-Key und API-Secret fehlen (OPNsense: System → Zugang → Benutzer → API-Schlüssel)")
     reach(host, port)
-    base = f"{scheme}://{host}:{port}/api"
     hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['key'].strip()}:{c['secret'].strip()}".encode()).decode()}
+    if scheme == "https" and "://" not in (c.get("host") or ""):      # Weboberfläche ohne TLS auf einem anderen Port: selbst erkennen
+        try:
+            _get(f"https://{host}:{port}/api/core/firmware/status", hdr, timeout=8)
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, ssl.SSLError) and not isinstance(e, urllib.error.HTTPError):
+                scheme = "http"
+        except Exception:  # noqa: BLE001 – alles andere klärt der eigentliche Abruf
+            pass
+    base = f"{scheme}://{host}:{port}/api"
 
     def first(*paths):
         err = None

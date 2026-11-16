@@ -307,3 +307,6 @@ body.nav-min #navlinks .ext{display:none}
   body.nav-min #navlinks .sub[hidden]{display:none}
   #navlinks a,#navlinks button{padding:9px 10px 9px 9px}
 }
+.card .rz{cursor:nwse-resize;opacity:.55}
+.card .rz:hover,.card.sel .rz{opacity:1}
+body.ro .card .rz{display:none}

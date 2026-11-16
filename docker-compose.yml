@@ -16,3 +16,5 @@ services:
       TZ: "Europe/Berlin"
     volumes:
       - ./data:/data
+      # Lokaler Docker dieses Hosts für die Docker-Anbindung (LabVis liest nur). Zeile entfernen, wenn nicht gewünscht.
+      - /var/run/docker.sock:/var/run/docker.sock:ro

@@ -209,6 +209,8 @@ function folder(w, h, tabW, stroke, dash) {
     `V${h - r} a${r},${r} 0 0 1 -${r},${r} H${r} a${r},${r} 0 0 1 -${r},-${r} V${r} a${r},${r} 0 0 1 ${r},-${r} z" ` +
     `fill="${dash ? '#0e141c' : PAL.PANEL}" stroke="${stroke}" stroke-width="1.6"${dash ? ' stroke-dasharray="9 6"' : ''}/>`;
 }
+// Größe von Hand: Bereiche und Karten mit Inhalt (Kinder oder Hardware)
+const canResize = d => d.type === 'group' || kidsOf(d.id).length > 0 || ((d.meta || {}).hw || []).length + ((d.meta || {}).hw_bmc || []).length > 0;
 function buildCard(d) {
   const kids = kidsOf(d.id), hw = [...((d.meta && d.meta.hw) || []), ...((d.meta && d.meta.hw_bmc) || [])];
   const trunk = S.links.some(l => l.trunk && (l.a_id === d.id || l.b_id === d.id));
@@ -236,7 +238,13 @@ function buildCard(d) {
   if (!n && hw.length) cols = Math.min(hw.length, 2);
   let cw = 240;
   const has = n || hw.length;
-  const w = Math.ceil(Math.max(tabW + 60, headW, memoOn(d) ? 320 : 0, has ? cols * cw + (cols - 1) * GAP + 2 * PAD : 0));
+  const minW = Math.ceil(Math.max(tabW + 60, headW, memoOn(d) ? 320 : 0, has ? 200 + 2 * PAD : 0));
+  const own = d.meta || {}, sized = canResize(d) && own.w > 0;      // von Hand gezogene Größe (Griff unten rechts)
+  let w = Math.ceil(Math.max(tabW + 60, headW, memoOn(d) ? 320 : 0, has ? cols * cw + (cols - 1) * GAP + 2 * PAD : 0));
+  if (sized) {
+    w = Math.max(minW, Math.round(own.w));
+    if (has) cols = Math.max(1, Math.min(Math.max(n, hw.length, 1), Math.floor((w - 2 * PAD + GAP) / (200 + GAP))));
+  }
   cw = (w - 2 * PAD - (cols - 1) * GAP) / cols;
   let s = T(16, 21, d.name, {size: 19, weight: 700}) + T(16 + tw(d.name, 19, 700), 21, '\u00a0·\u00a0' + type, {size: 13, weight: 500, fill: PAL.MUTED});
   s += IMG(d.icon || 'type-' + d.type, 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20));
@@ -280,9 +288,12 @@ function buildCard(d) {
     for (const c of b.chips) { s += chipSvg(c, bx, colY[ci], cw, d.vlan_id); colY[ci] += chipH(c) + 8; }
     if (b.title) colY[ci] += 6;
   }
-  const h = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
+  const minH = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
+  const h = canResize(d) && own.h > 0 ? Math.max(minH, Math.round(own.h)) : minH;
   s = folder(w, h, tabW, stroke, grp) + s;
-  return {id: d.id, d, w, h, tabW, x: d.x, y: d.y, svg: s};
+  if (canResize(d)) s += `<g class="rz" data-rz="${d.id}"><title>Größe ziehen · Doppelklick: automatische Größe</title><rect x="${w - 30}" y="${h - 30}" width="30" height="30" fill="transparent"/>` +
+    `<path d="M${w - 7},${h - 17} L${w - 17},${h - 7} M${w - 7},${h - 11} L${w - 11},${h - 7}" stroke="${own.w > 0 || own.h > 0 ? PAL.TEXT || '#e6edf3' : PAL.MUTED}" stroke-width="1.8" stroke-linecap="round" fill="none"/></g>`;
+  return {id: d.id, d, w, h, minW, minH, tabW, x: d.x, y: d.y, svg: s};
 }
 
 // ------------------------------------------------------------ Topologie: Kabel
@@ -487,9 +498,16 @@ function focusSel() {
   });
   const me = w.querySelector(`.card[data-id="${t}"]`); if (me) me.classList.add('hl');
 }
+function resizeCard(card) {
+  const node = card.node, nc = buildCard(dev(card.id));
+  Object.assign(card, nc, {node});
+  node.innerHTML = nc.svg;
+  $('#links').innerHTML = linksSvg(); focusSel();
+}
 function bindCanvas() {
   const svg = $('#svg'), pts = new Map();
   let mode = null, start = null, card = null, moved = false, pinch = null;
+  let lastRz = {id: 0, t: 0};
   svg.addEventListener('wheel', e => {
     e.preventDefault();
     const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
@@ -504,9 +522,10 @@ function bindCanvas() {
       pinch = {d: Math.hypot(a[0] - b[0], a[1] - b[1]), k: cam.k, cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2, x: cam.x, y: cam.y};
       mode = 'pinch'; return;
     }
-    const cn = e.target.closest('.card');
+    const cn = e.target.closest('.card'), rz = e.target.closest('.rz');
     moved = false; start = [e.clientX, e.clientY];
-    if (cn) { card = cards.get(+cn.dataset.id); mode = 'card'; start.push(card.x, card.y); card.node = cn; card.hit = e.target; }
+    if (rz && cn && !ro() && dev(+rz.dataset.rz)) { card = cards.get(+cn.dataset.id); mode = 'size'; start.push(card.w, card.h); card.node = cn; }
+    else if (cn) { card = cards.get(+cn.dataset.id); mode = 'card'; start.push(card.x, card.y); card.node = cn; card.hit = e.target; }
     else { mode = 'pan'; start.push(cam.x, cam.y); card = null; }
     start.target = e.target;
   });
@@ -523,6 +542,11 @@ function bindCanvas() {
     if (!moved && Math.hypot(dx, dy) < 5) return;
     moved = true; busy = true;
     if (mode === 'pan') { cam.x = start[2] + dx; cam.y = start[3] + dy; applyCam(); }
+    else if (mode === 'size') {
+      const d = dev(card.id);
+      d.meta = {...(d.meta || {}), w: Math.max(card.minW, Math.round(start[2] + dx / cam.k)), h: Math.max(card.minH, Math.round(start[3] + dy / cam.k))};
+      resizeCard(card);
+    }
     else if (mode === 'card') {
       card.x = Math.round(start[2] + dx / cam.k); card.y = Math.round(start[3] + dy / cam.k);
       card.node.setAttribute('transform', `translate(${card.x},${card.y})`);
@@ -534,6 +558,23 @@ function bindCanvas() {
     pts.delete(e.pointerId);
     if (mode === 'pinch') { if (pts.size < 2) mode = null; return; }
     busy = false;
+    if (mode === 'size') {
+      const d = dev(card.id);
+      if (d && moved) {
+        const c = cards.get(d.id);        // gleich hoch wie der Inhalt = Höhe wieder automatisch
+        if (d.meta.h <= c.minH + 4) d.meta.h = null;
+        api('PUT', '/api/devices/' + d.id, {meta: {w: d.meta.w, h: d.meta.h}}).catch(er => toast(er.message, true));
+      }
+      if (d && !moved) {                  // zweimal kurz hintereinander angetippt: zurück zur automatischen Größe
+        const now = Date.now();
+        if (lastRz.id === d.id && now - lastRz.t < 450 && (d.meta.w || d.meta.h)) {
+          d.meta = {...d.meta, w: null, h: null}; resizeCard(card);
+          api('PUT', '/api/devices/' + d.id, {meta: {w: null, h: null}}).catch(er => toast(er.message, true));
+        }
+        lastRz = {id: d.id, t: now};
+      }
+      mode = null; return;
+    }
     if (mode === 'card' && moved) {
       const d = dev(card.id);
       if (!d) saveRoomPos(card.room, card.x, card.y);
@@ -1053,7 +1094,7 @@ function renderInteg() {
     Object.entries(S.kinds).map(([k, v]) => `<button class="btn" data-act="newInteg" data-kind="${k}">+ ${esc(v.label)}</button>`).join('') +
     `<span class="grow"></span><span class="muted">Sync alle ${esc(S.settings.sync_interval_min)} min</span></div>` +
     (S.integrations.length ? `<div class="cards">${S.integrations.map(i => { const d = dev(i.device_id); const bad = (i.last_status || '').startsWith('Fehler');
-      return `<div class="box"><div class="rowl" style="border:0;padding:0"><b>${esc(S.kinds[i.kind].label)}</b><span class="muted">${esc(i.name || i.config.host || i.config.url || '')}</span>` +
+      return `<div class="box"><div class="rowl" style="border:0;padding:0"><b>${esc(S.kinds[i.kind].label)}</b><span class="muted">${esc(i.name || i.config.host || i.config.url || (i.kind === 'docker' ? 'lokaler Docker' : '') || '')}</span>` +
         `<span class="dot ${bad ? 'offline' : i.last_sync ? 'online' : ''}" style="margin-left:auto"></span></div>` +
         `<div class="muted" style="font-size:12.5px;margin:4px 0">${d ? 'Gerät: ' + esc(d.name) + ' · ' : ''}Sync vor ${ago(i.last_sync)}</div>` +
         `<div style="font-size:13px;${bad ? 'color:#ffb4ae' : ''}">${esc(i.last_status || 'noch nicht synchronisiert')}</div>` +
@@ -1064,6 +1105,7 @@ function renderInteg() {
       `<div class="muted" style="font-size:12.5px;margin:4px 0 8px">${esc(s.reason)} · liest: ${esc(s.reads)}</div>` +
       `<button class="btn sm pri" data-act="newInteg" data-kind="${esc(s.connector)}" data-dev="${d.id}" data-sug="${n}">Einrichten</button></div>`).join('')}</div>` : '') + '</div>';
 }
+const isLocal = ip => !!ip && ((S.local || {}).ips || []).includes(ip);
 function integForm(i) {
   const isNew = !i.id, k = S.kinds[i.kind];
   // Auswahl: dokumentierte Geräte und Funde aus dem Scan; passende (laut Erkennung) zuerst
@@ -1097,7 +1139,7 @@ function integForm(i) {
     const c = cands.find(x => x.v === pick.value), f = n => $(`[name=${n}]`, panel);
     if (!c) return;
     if (f('c_host')) f('c_host').value = i.kind === 'homeassistant' ? `http://${c.ip}:8123` : c.ip;
-    if (f('c_url')) f('c_url').value = `http://${c.ip}:2375`;
+    if (f('c_url')) f('c_url').value = isLocal(c.ip) ? '' : `http://${c.ip}:2375`;   // LabVis-Host selbst: über den Docker-Socket
     if (!f('name').value || f('name').dataset.auto) { f('name').value = c.name; f('name').dataset.auto = '1'; }
     f('device_id').value = c.v.startsWith('d:') ? c.v.slice(2) : '';
   });
@@ -1322,7 +1364,9 @@ const ACT = {
   restore: d => run(() => api('POST', `/api/discoveries/${d.id}/restore`)),
   newInteg: d => {
     const x = d.dev ? dev(+d.dev) : null, s = x && d.sug != null ? x.meta.suggestions[+d.sug] : null;
-    integForm({kind: d.kind, device_id: x ? x.id : '', name: x ? x.name : '', config: s ? s.config : {}});
+    const cfg = s ? {...s.config} : {};
+    if (d.kind === 'docker' && x && isLocal(x.ip)) cfg.url = '';   // der Host, auf dem LabVis läuft: Socket statt Netzwerk-API
+    integForm({kind: d.kind, device_id: x ? x.id : '', name: x ? x.name : '', config: cfg});
   },
   editInteg: d => integForm(S.integrations.find(i => i.id === +d.id)),
   delInteg: d => { if (confirm('Anbindung löschen? Bereits ausgelesene Geräte bleiben erhalten.')) run(() => api('DELETE', '/api/integrations/' + d.id)); },

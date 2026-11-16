@@ -18,7 +18,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.17.1"
+VERSION = "0.19.0"
 
 
 def _build_id():
@@ -107,6 +107,7 @@ def state(request: Request):
         "scans": db.q("SELECT * FROM scans ORDER BY id DESC LIMIT 15"),
         "scanner": {**scanner.STATE, "privileged": scanner.privileged()},
         "kinds": connectors.KINDS,
+        "local": {"ips": connectors.local_ips(), "docker_sock": os.path.exists(connectors.DOCKER_SOCK)},
         "now": db.now(),
     }
 
@@ -135,7 +136,7 @@ def create(table: str, data: dict = Body(...)):
     if table == "navlinks" and not (data.get("label") and data.get("url")):
         raise HTTPException(400, "Bezeichnung und Adresse fehlen")
     if table == "integrations":
-        key = lambda c: ((c.get("host") or c.get("url") or "").strip().lower(), str(c.get("port") or ""))   # noqa: E731
+        key = lambda c: ((c.get("host") or c.get("url") or ("local" if data.get("kind") == "docker" else "")).strip().lower(), str(c.get("port") or ""))   # noqa: E731
         if key(data.get("config") or {})[0] and any(i["kind"] == data.get("kind") and key(i["config"] or {}) == key(data["config"])
                                                  for i in db.q("SELECT kind, config FROM integrations")):
             raise HTTPException(400, "Für diese Adresse gibt es schon eine Anbindung dieser Art")

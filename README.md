@@ -77,7 +77,7 @@ Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über 
 
 Das Menü steht links und lässt sich auf eine Symbolleiste einklappen (der Browser merkt sich die Wahl); auf dem Handy öffnet es sich
 als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links** – etwa zu Radarr oder zum IPMI –, auf Wunsch in aufklappbaren Kategorien
-(„Links bearbeiten" im Menü; Adresse und Icon lassen sich aus einem dokumentierten Gerät übernehmen). Über „Zum Startbildschirm hinzufügen" lässt sich LabVis mit eigenem Symbol wie eine App ablegen.
+(„Links bearbeiten" im Menü; Adresse und Icon lassen sich aus einem dokumentierten Gerät übernehmen). In der Topologie lassen sich Bereiche und Karten mit Inhalt am Griff unten rechts in der Größe ziehen (zweimal antippen = automatische Größe). Über „Zum Startbildschirm hinzufügen" lässt sich LabVis mit eigenem Symbol wie eine App ablegen.
 
 | Bereich | Inhalt |
 |---|---|
@@ -196,7 +196,11 @@ Token-ID `labvis@pve!labvis` und das Secret eintragen. Gelesen werden Nodes (CPU
 LXC-Container samt IP (bei VMs nur mit QEMU-Guest-Agent). Bereits gescannte Hosts mit gleicher IP oder
 gleichem Namen werden übernommen statt doppelt angelegt.
 
-**Docker** – pro Docker-Host einen read-only Socket-Proxy starten und `http://<host>:2375` eintragen:
+**Docker** – für den Host, auf dem LabVis selbst läuft: Anbindung „Docker" anlegen und die API-URL **leer lassen**. LabVis liest dann über
+den Docker-Socket, der in der `docker-compose.yml` eingebunden ist (`/var/run/docker.sock`). Das funktioniert neben Dockhand oder Portainer,
+die denselben Socket nutzen. LabVis liest nur; wer den Socket nicht einbinden will, entfernt die Zeile und nutzt auch lokal einen Socket-Proxy.
+
+Für alle anderen Docker-Hosts einen read-only Socket-Proxy starten und `http://<host>:2375` eintragen:
 
 ```yaml
 services:
