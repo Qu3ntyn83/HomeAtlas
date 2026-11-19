@@ -108,7 +108,7 @@ async function load(silent) {
 }
 function render() {
   main.className = view === 'topo' ? 'canvas' : '';
-  ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
+  ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, ipam: renderIpam, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
 }
 // Seitenmenü: am Desktop ein-/ausklappbar (gemerkt), am Handy als Schublade
 const navStore = v => { try { if (v === undefined) return localStorage.getItem('labvis.nav'); localStorage.setItem('labvis.nav', v); } catch (e) { /* ohne Speicher gilt die Wahl bis zum Neuladen */ } return null; };
@@ -609,7 +609,7 @@ function showDevice(id, keep) {
     `<div class="rowl" style="border:0"><span class="dot ${d.status}"></span>${d.status === 'online' ? 'online' : d.status === 'offline' ? 'offline' : 'Status unbekannt'}` +
     `<span class="muted">· zuletzt gesehen: ${ago(d.last_seen)}</span></div>` +
     `<div class="acts">${d.url ? `<a class="btn pri" href="${esc(d.url)}" target="_blank" rel="noopener">Öffnen ↗</a>` : ''}` +
-    `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button><button class="btn" data-act="newLink" data-id="${id}">Verbinden</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="wlan">WLAN-Verbindung</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="api">API-Verbindung</button>` +
+    `<button class="btn" data-act="editDevice" data-id="${id}">Bearbeiten</button>${d.ip ? `<button class="btn" data-act="ipamShow" data-ip="${esc(d.ip)}">IPAM</button>` : ''}<button class="btn" data-act="newLink" data-id="${id}">Verbinden</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="wlan">WLAN-Verbindung</button><button class="btn" data-act="newLink" data-id="${id}" data-kind="api">API-Verbindung</button>` +
     `<button class="btn" data-act="addAddr" data-id="${id}">+ Adresse</button><button class="btn" data-act="merge" data-id="${id}">Zusammenführen</button>` +
     `<button class="btn" data-act="newDevice" data-parent="${id}">+ Kind</button>${d.type === 'group' ? `<button class="btn" data-act="groupAdd" data-id="${id}">Geräte hinzufügen</button>` : ''}` +
     `<button class="btn bad" data-act="delDevice" data-id="${id}">${d.type === 'group' ? 'Bereich auflösen' : 'Löschen'}</button></div>` +
@@ -723,7 +723,7 @@ function iconHelp(inp) {
 }
 function openForm(title, fields, val, onSave, extra, keepSel) {
   if (ro()) return;
-  navBack = false;
+  navBack = false; ipamBack = null;
   if (!keepSel) sel = null;
   openPanel(formHtml(title, fields, val, extra), 'form');
   if ($('[name=memo]', panel)) $('[name=memo]', panel).rows = 6;
@@ -1203,11 +1203,49 @@ function renderSystem() {
 // ------------------------------------------------------------ Aktionen
 const ACT = {
   close: () => { navBack = false; closePanel(); },
+  ipamTab: d => { ipamTab = d.t; renderIpam(true); },
+  ipamNet: d => { ipamNet = +d.v; renderIpam(true); },
+  ipamRefresh: () => { loadIpam(true); renderIpam(true); },
+  ipamDnsFilter: d => { ipamDnsFilter = d.f; renderIpam(true); },
+  ipamCellOpen: d => { if (view !== 'ipam') return; const [s] = ipamCell(d.ip); if (s && s.vlan_id !== ipamNet && ipamTab === 'addr') { ipamNet = s.vlan_id; renderIpam(true); } ipamCellPanel(d.ip); },
+  ipamCopy: d => { (navigator.clipboard ? navigator.clipboard.writeText(d.v) : Promise.reject()).then(() => toast(d.v + ' kopiert'), () => toast(d.v)); },
+  ipamPick: (d, el) => { const id = +d.id; el.checked ? ipamPick.add(id) : ipamPick.delete(id); renderIpam(true); },
+  ipamPickAll: (d, el) => { if (el.checked) IPAM.missing.forEach(m => ipamPick.add(m.id)); else ipamPick.clear(); renderIpam(true); },
+  ipamDomSave: () => { const v = (ipamNames._dom ?? IPAM.domain).trim(); api('POST', '/api/settings/save', {dns_domain: v}).then(() => { IPAM.domain = v; toast('Domain gespeichert'); }, er => toast(er.message, true)); },
+  ipamDnsAdd: () => {
+    const dom = (ipamNames._dom ?? IPAM.domain).trim(), items = IPAM.missing.filter(m => ipamPick.has(m.id)).map(m => ({hostname: ipamSlug(ipamNames[m.id] ?? m.suggest), domain: dom, ip: m.ip, description: 'LabVis: ' + m.name}));
+    if (!items.length) return;
+    if (!confirm(`${items.length} DNS-Einträge in ${SRC[IPAM.dns_target]} anlegen?\n\n` + items.slice(0, 12).map(i => `${i.hostname}${dom ? '.' + dom : ''} → ${i.ip}`).join('\n') + (items.length > 12 ? '\n…' : ''))) return;
+    ipamWrite('/api/ipam/dns', {op: 'add', items}, `${items.length} DNS-Einträge angelegt`).then(ok => { if (ok) ipamPick.clear(); });
+  },
+  ipamDnsSet: d => { if (confirm(`DNS-Eintrag auf ${d.ip} ändern?`)) ipamWrite('/api/ipam/dns', {op: 'set', uuid: d.u, ip: d.ip}, 'DNS-Eintrag geändert'); },
+  ipamDnsDel: d => { if (confirm(`DNS-Eintrag „${d.n}“ in der OPNsense löschen?`)) ipamWrite('/api/ipam/dns', {op: 'del', uuid: d.u}, 'DNS-Eintrag gelöscht'); },
+  ipamDnsOne: d => {
+    const [, c] = ipamCell(d.ip), back = () => ipamCellPanel(d.ip);
+    openForm('DNS-Eintrag für ' + esc(d.ip), [[['hostname', 'Hostname'], ['domain', 'Domain']], ['description', 'Beschreibung']],
+      {hostname: ipamSlug(ipamDevName(d.ip, c)), domain: ipamNames._dom ?? IPAM.domain, description: 'LabVis'},
+      async data => { if (await ipamWrite('/api/ipam/dns', {op: 'add', items: [{...data, ip: d.ip}]}, 'DNS-Eintrag angelegt')) setTimeout(back, 0); else throw new Error('nicht angelegt'); });
+    ipamBack = back;
+  },
+  ipamResAdd: d => {
+    const [, c] = ipamCell(d.ip), back = () => ipamCellPanel(d.ip);
+    openForm('DHCP-Reservierung für ' + esc(d.ip), [['mac', 'MAC-Adresse'], ['hostname', 'Hostname'], ['description', 'Beschreibung']],
+      {mac: d.mac, hostname: ipamSlug(ipamDevName(d.ip, c)), description: 'LabVis'},
+      async data => { if (await ipamWrite('/api/ipam/dhcp', {op: 'add', ip: d.ip, ...data, domain: ipamNames._dom ?? IPAM.domain}, `Reservierung in ${SRC[IPAM.dhcp_target]} angelegt`)) setTimeout(back, 0); else throw new Error('nicht angelegt'); },
+      `<div class="hint" style="margin-top:12px;font-size:12.5px">Wird in ${SRC[IPAM.dhcp_target]} angelegt. Das Gerät bekommt die Adresse beim nächsten Erneuern seiner Lease.</div>`);
+    ipamBack = back;
+  },
+  ipamResDel: d => { if (confirm(`DHCP-Reservierung für ${d.ip} löschen?`)) ipamWrite('/api/ipam/dhcp', {op: 'del', uuid: d.u}, 'Reservierung gelöscht'); },
+  ipamNewDev: d => {
+    const [s, c] = ipamCell(d.ip), mac = c && ((c.arp && c.arp.mac) || (c.lease && c.lease.mac) || (c.res && c.res.mac)) || '';
+    deviceForm({type: 'other', ip: d.ip, mac, name: ipamDevName(d.ip, c), hostname: ipamDevName(d.ip, c), vlan_id: s ? s.vlan_id : '', rack_height: 1});
+  },
+  ipamShow: d => { const b = $('#side [data-view=ipam]'); b.click(); ipamTab = 'addr'; ipamCellIp = d.ip; const go = () => { if (IPAM) ACT.ipamCellOpen({ip: d.ip}); else setTimeout(go, 200); }; go(); },
   navEdit: () => navEditPanel(),
   newNav: () => navForm({}),
   editNav: d => navForm(S.navlinks.find(l => l.id === +d.id)),
   delNav: d => { const l = S.navlinks.find(x => x.id === +d.id); if (confirm(`Link „${l.label}“ aus dem Menü entfernen?`)) run(async () => { await api('DELETE', '/api/navlinks/' + l.id); await load(true); navEditPanel(); }); },
-  cancel: () => { if (navBack) { navBack = false; navEditPanel(); } else if (sel && dev(sel)) showDevice(sel); else closePanel(); },
+  cancel: () => { if (ipamBack) { const b = ipamBack; ipamBack = null; b(); } else if (navBack) { navBack = false; navEditPanel(); } else if (sel && dev(sel)) showDevice(sel); else closePanel(); },
   show: d => { const x = dev(+d.id); if (x) showDevice(x.id); },
   goFinds: () => $('#tabs [data-view="finds"]').click(),
   fit: fitView,
@@ -1409,6 +1447,174 @@ const ACT = {
   },
 };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') navDrawer(false); });
+// ------------------------------------------------------------ IPAM & DNS (Daten aus der OPNsense, Abgleich mit der Dokumentation)
+let IPAM = null, ipamAt = 0, ipamLoading = false, ipamErr = '', ipamTab = 'addr', ipamNet = null, ipamDnsFilter = 'all', ipamCellIp = null;
+const ipamPick = new Set(), ipamNames = {};
+const ipamCan = () => !ro() && IPAM && IPAM.write;
+async function loadIpam(refresh) {
+  if (ipamLoading) return;
+  ipamLoading = true;
+  try {
+    IPAM = await api(refresh ? 'POST' : 'GET', refresh ? '/api/ipam/refresh' : '/api/ipam'); ipamAt = Date.now(); ipamErr = '';
+    if (refresh && IPAM.sync_status) toast(IPAM.sync_status, IPAM.sync_status.startsWith('Fehler'));
+  } catch (e) { ipamErr = e.message; if (refresh) toast(e.message, true); }
+  ipamLoading = false;
+  if (view === 'ipam') { renderIpam(true); if (panelMode === 'ipam' && ipamCellIp) ipamCellPanel(ipamCellIp); }
+}
+async function ipamWrite(url, body, msg) {
+  try { IPAM = await api('POST', url, body); ipamAt = Date.now(); toast(msg); }
+  catch (e) { toast(e.message, true); return false; }
+  renderIpam(true);
+  if (panelMode === 'ipam' && ipamCellIp) ipamCellPanel(ipamCellIp);
+  return true;
+}
+const ipamCell = ip => { for (const s of IPAM.subnets) { const c = s.cells.find(x => x.ip === ip); if (c) return [s, c]; } return [IPAM.subnets.find(s => ip2int(ip) - ip2int(s.first) >= 0 && ip2int(ip) - ip2int(s.first) < s.size), null]; };
+const SRC = {unbound: 'Unbound', dnsmasq: 'Dnsmasq', kea: 'Kea', isc: 'ISC DHCP'};
+function ipamClass(c, off, s) {
+  if (!c) return off === 0 || off === s.size - 1 ? 'x' : '';
+  const k = [];
+  if (c.issues.length) k.push('bad');
+  if (c.gw) k.push('gw'); else if (c.devs.length) k.push('doc'); else if (c.undoc) k.push('unk'); else if (c.dns.length) k.push('dnsonly');
+  if (c.res) k.push('r');
+  if (c.dns.length && (c.devs.length || c.gw)) k.push('d');
+  return k.join(' ');
+}
+function renderIpam(force) {
+  const a = document.activeElement;
+  if (!force && main.querySelector('.ipam') && a && main.contains(a) && a.matches('input,select')) return;   // nicht beim Tippen neu zeichnen
+  if ((!IPAM && !ipamErr) || (Date.now() - ipamAt > 60000 && !ipamLoading && IPAM)) loadIpam(false);
+  if (!IPAM) { main.innerHTML = `<div class="page ipam"><h2>IPAM &amp; DNS</h2><div class="hint">${ipamErr ? esc(ipamErr) : 'Lade Daten …'}</div></div>`; return; }
+  const I = IPAM;
+  if (!I.source) {
+    main.innerHTML = `<div class="page ipam"><h2>IPAM &amp; DNS</h2><div class="hint">Adressen, DNS-Einträge und DHCP kommen direkt aus der OPNsense. ` +
+      `Richte dafür zuerst die Anbindung ein.${ro() ? '' : ' <button class="btn pri" data-act="newInteg" data-kind="opnsense" style="margin-left:8px">OPNsense anbinden</button>'}</div></div>`;
+    return;
+  }
+  if (!ipamNet || !I.subnets.some(s => s.vlan_id === ipamNet)) ipamNet = (I.subnets.find(s => s.conflicts.length) || I.subnets[0] || {}).vlan_id;
+  const svc = (k, label, extra) => I.services[k] ? `<span class="pill ${I.services[k] === 'running' ? 'on' : ''}" title="${esc(label)}: ${esc(I.services[k])}"><i></i>${label}${extra ? ' · ' + extra : ''}</span>` : '';
+  const hints = I.records.filter(r => ['moved', 'orphan', 'dup'].includes(r.status)).length;
+  let h = `<div class="page ipam"><div class="ihead"><div><h2>IPAM &amp; DNS</h2><div class="muted isrc">OPNsense „${esc(I.source.name)}“ · Stand ${I.fetched ? ago(I.fetched) : 'noch nie gelesen'}` +
+    `${I.write ? ' · <span class="wr">Schreiben erlaubt</span>' : ' · nur lesen'}</div></div><div class="iact"><div class="seg">` +
+    `<button class="btn${ipamTab === 'addr' ? ' on' : ''}" data-act="ipamTab" data-t="addr">Adressen</button>` +
+    `<button class="btn${ipamTab === 'dns' ? ' on' : ''}" data-act="ipamTab" data-t="dns">DNS${hints + I.missing.length ? ` <span class="cnt">${hints + I.missing.length}</span>` : ''}</button></div>` +
+    `<button class="btn" data-act="ipamRefresh"${ipamLoading ? ' disabled' : ''}>${ipamLoading ? 'Lese …' : 'Neu einlesen'}</button></div></div>`;
+  h += '<div class="isvc">' + svc('unbound', 'Unbound', I.dns_target === 'unbound' ? I.counts.dns + ' Einträge' : '') + svc('dnsmasq', 'Dnsmasq', '') + svc('kea', 'Kea DHCP', '') +
+    `<span class="pill">${I.counts.reservations} Reservierungen</span><span class="pill">${I.counts.leases} Leases</span><span class="pill">ARP ${I.counts.arp}</span>` +
+    Object.entries(I.errors).map(([k, v]) => `<span class="pill err" title="${esc(v)}">⚠ ${esc(k)}</span>`).join('') + '</div>';
+  if (!I.write && !ro()) h += `<div class="hint ro">Nur lesen. Zum Anlegen und Ändern von DNS-Einträgen und Reservierungen in der <a href="#" data-act="editInteg" data-id="${I.source.id}">OPNsense-Anbindung</a> den Haken „Änderungen … erlauben“ setzen.</div>`;
+  h += ipamTab === 'addr' ? ipamAddrHtml(I) : ipamDnsHtml(I);
+  main.innerHTML = h + '</div>';
+}
+function ipamAddrHtml(I) {
+  if (!I.subnets.length) return '<div class="hint">Keine Netze mit Subnetz dokumentiert. Unter <b>Netzwerke</b> beim VLAN das Subnetz eintragen (z. B. 192.168.10.0/24).</div>';
+  let h = '<div class="inets">' + I.subnets.map(s => {
+    const pct = Math.round(s.used / Math.max(1, s.hosts) * 100);
+    return `<button class="inet${s.vlan_id === ipamNet ? ' on' : ''}" data-act="ipamNet" data-v="${s.vlan_id}" style="--c:${esc(s.color || '#8d9aab')}"><b>${esc(s.name)}</b>` +
+      `<span>${esc(s.subnet)}</span><i class="u"><i style="width:${pct}%"></i></i><em>${s.used}/${s.hosts}${s.conflicts.length ? ` · <span class="bad">⚠ ${s.conflicts.length}</span>` : ''}</em></button>`;
+  }).join('') + '</div>';
+  const s = I.subnets.find(x => x.vlan_id === ipamNet);
+  const first = ip2int(s.first), byOff = new Map(s.cells.map(c => [c.off, c]));
+  const poolTxt = s.pools.map(p => `${p.start.split('.').slice(-1)}–${p.end.split('.').slice(-1)}`).join(', ');
+  const tile = (k, v, sub, cls) => `<div class="itile${cls ? ' ' + cls : ''}"><span>${k}</span><b>${v}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  h += `<div class="itiles" style="--c:${esc(s.color || '#8d9aab')}">` + tile('Belegt', `${s.used}<i>/${s.hosts}</i>`, Math.round(s.used / Math.max(1, s.hosts) * 100) + ' %') +
+    tile('Dokumentiert', s.documented, s.gateway ? 'Gateway ' + esc(s.gateway) : '') + tile('Nicht dokumentiert', s.undoc, 'im Netz gesehen', s.undoc ? 'warn' : '') +
+    tile('DHCP-Bereich', s.pool_size || '–', poolTxt ? '.' + esc(poolTxt) : 'keiner gefunden') + tile('Konflikte', s.conflicts.length, s.conflicts.length ? 'siehe unten' : 'keine', s.conflicts.length ? 'bad' : 'ok') +
+    `<div class="itile next"><span>Nächste freie Adresse</span><b>${s.next_free ? esc(s.next_free) : '–'}</b><small>außerhalb des DHCP-Bereichs</small>` +
+    (s.next_free ? `<button class="btn sm" data-act="ipamCopy" data-v="${esc(s.next_free)}">Kopieren</button>` : '') + '</div></div>';
+  if (s.size <= 1024) {
+    const pools = s.pools.map(p => [ip2int(p.start) - first, ip2int(p.end) - first]);
+    let g = '';
+    for (let off = 0; off < s.size; off++) {
+      const c = byOff.get(off), ip = int2ip(first + off), pool = pools.some(([a, b]) => off >= a && off <= b);
+      const tip = c ? [ip, ...c.devs.map(d => d.name), c.gw ? 'Gateway' : '', c.res ? 'Reservierung ' + (c.res.hostname || c.res.mac) : '', c.lease && !c.devs.length ? 'Lease ' + (c.lease.hostname || c.lease.mac) : '',
+        c.arp && !c.devs.length ? 'ARP ' + c.arp.mac : '', ...c.dns, ...c.issues.map(i => '⚠ ' + i[1])].filter(Boolean).join('\n') : ip + (off === 0 ? '\nNetzadresse' : off === s.size - 1 ? '\nBroadcast' : pool ? '\nfrei · DHCP-Bereich' : '\nfrei');
+      g += `<button class="ic ${ipamClass(c, off, s)}${pool ? ' p' : ''}${ipamCellIp === ip ? ' sel' : ''}" data-act="ipamCellOpen" data-ip="${ip}" title="${esc(tip)}">${s.size > 256 ? ip.split('.').slice(-2).join('.') : ip.split('.')[3]}</button>`;
+    }
+    h += `<div class="igrid${s.size > 256 ? ' wide' : ''}" style="--c:${esc(s.color || '#58a6ff')}">${g}</div>`;
+  } else {
+    h += '<table class="t"><tr><th>Adresse</th><th>Gerät</th><th>DHCP</th><th>DNS</th><th>Hinweis</th></tr>' + s.cells.map(c =>
+      `<tr><td><a href="#" data-act="ipamCellOpen" data-ip="${c.ip}">${c.ip}</a></td><td>${c.devs.map(d => esc(d.name)).join(', ') || (c.gw ? 'Gateway' : '–')}</td>` +
+      `<td>${c.res ? 'Reservierung' : c.lease ? 'Lease' : ''}</td><td>${c.dns.map(esc).join(', ')}</td><td>${c.issues.map(i => esc(i[1])).join('; ') || (c.undoc ? 'nicht dokumentiert' : '')}</td></tr>`).join('') + '</table>';
+  }
+  h += '<div class="ilegend"><span><i class="ic doc"></i>dokumentiert</span><span><i class="ic unk"></i>nicht dokumentiert</span><span><i class="ic gw"></i>Gateway</span>' +
+    '<span><i class="ic r"></i>DHCP-Reservierung</span><span><i class="ic dnsonly"></i>nur DNS</span><span><i class="ic p"></i>DHCP-Bereich</span><span><i class="ic bad"></i>Konflikt</span></div>';
+  const undoc = s.cells.filter(c => c.undoc);
+  if (s.conflicts.length || undoc.length) {
+    h += '<div class="iissues">';
+    for (const k of s.conflicts) h += `<div class="iss bad"><a href="#" data-act="ipamCellOpen" data-ip="${k.ip}">${k.ip}</a><span>${esc(k.text)}</span></div>`;
+    for (const c of undoc) {
+      const who = (c.lease && c.lease.hostname) || (c.arp && c.arp.hostname) || (c.res && c.res.hostname) || '';
+      h += `<div class="iss"><a href="#" data-act="ipamCellOpen" data-ip="${c.ip}">${c.ip}</a><span>Nicht dokumentiert${who ? ': ' + esc(who) : ''} · ${esc((c.arp || c.lease || c.res).mac || '')}` +
+        `${c.lease && !c.res ? ' · per DHCP' : ''}</span>${ro() ? '' : `<button class="btn sm" data-act="ipamNewDev" data-ip="${c.ip}">Als Gerät anlegen</button>`}</div>`;
+    }
+    h += '</div>';
+  }
+  return h;
+}
+const DNS_ST = {ok: ['passt', 'ok'], moved: ['Adresse veraltet', 'warn'], orphan: ['kein Gerät', ''], dup: ['doppelt', 'bad'], off: ['deaktiviert', ''], other: ['', '']};
+function ipamDnsHtml(I) {
+  const hints = I.records.filter(r => ['moved', 'orphan', 'dup'].includes(r.status));
+  const rows = ipamDnsFilter === 'hints' ? hints : I.records;
+  const can = ipamCan();
+  let h = `<div class="dnsbar"><div class="seg"><button class="btn${ipamDnsFilter === 'all' ? ' on' : ''}" data-act="ipamDnsFilter" data-f="all">Alle Einträge (${I.records.length})</button>` +
+    `<button class="btn${ipamDnsFilter === 'hints' ? ' on' : ''}" data-act="ipamDnsFilter" data-f="hints">Hinweise (${hints.length})</button></div>` +
+    `<label class="dom">Domain für neue Einträge <input id="ipamDom" value="${esc(ipamNames._dom ?? I.domain)}" placeholder="z. B. home.lan" spellcheck="false"></label>` +
+    `${S.role === 'admin' ? '<button class="btn sm" data-act="ipamDomSave">als Standard</button>' : ''}<span class="muted">Ziel: ${I.dns_target ? SRC[I.dns_target] : 'kein DNS-Dienst erkannt'}</span></div>`;
+  if (!I.records.length) h += '<div class="hint">Die OPNsense liefert keine DNS-Einträge (Unbound: Host-Overrides, Dnsmasq: Hosts).</div>';
+  else h += '<div class="tw"><table class="t idns"><tr><th>Status</th><th>Name</th><th>Typ</th><th>Ziel</th><th>Gerät</th><th>Quelle</th><th></th></tr>' + rows.map(r => {
+    const [t, cls] = DNS_ST[r.status] || ['', ''];
+    const act = !can || !r.uuid ? '' : (r.status === 'moved' ? `<button class="btn sm pri" data-act="ipamDnsSet" data-u="${esc(r.uuid)}" data-ip="${esc(r.suggest.ip)}">auf ${esc(r.suggest.ip)} ändern</button>` : '') +
+      `<button class="btn sm bad" data-act="ipamDnsDel" data-u="${esc(r.uuid)}" data-n="${esc(r.fqdn)}" aria-label="${esc(r.fqdn)} löschen">Löschen</button>`;
+    const dev = r.devs.length ? r.devs.map(d => `<a href="#" data-act="show" data-id="${d.id}">${esc(d.name)}</a>`).join(', ') : r.suggest ? `<span class="muted">${esc(r.suggest.name)} hat ${esc(r.suggest.ip)}</span>` : '<span class="muted">–</span>';
+    return `<tr class="${r.status}"><td>${t ? `<span class="st ${cls}">${t}</span>` : ''}</td><td class="mono">${esc(r.fqdn)}</td><td>${esc(r.rr)}</td>` +
+      `<td class="mono">${r.rr === 'A' && r.value ? `<a href="#" data-act="ipamCellOpen" data-ip="${esc(r.value)}">${esc(r.value)}</a>` : esc(r.value)}</td><td>${dev}</td><td>${SRC[r.src] || r.src}</td><td class="ra">${act}</td></tr>`;
+  }).join('') + '</table></div>';
+  h += `<h3 class="imh">Geräte ohne DNS-Eintrag <span class="muted">(${I.missing.length})</span></h3>`;
+  if (!I.missing.length) return h + '<div class="hint">Jedes dokumentierte Gerät mit IP-Adresse hat einen DNS-Eintrag.</div>';
+  for (const id of [...ipamPick]) if (!I.missing.some(m => m.id === id)) ipamPick.delete(id);
+  h += '<div class="tw"><table class="t imiss"><tr>' + (can ? `<th><input type="checkbox" data-act="ipamPickAll"${ipamPick.size === I.missing.length ? ' checked' : ''} aria-label="alle auswählen"></th>` : '') +
+    '<th>Gerät</th><th>Adresse</th><th>Name im DNS</th><th>Hinweis</th></tr>' + I.missing.map(m =>
+      `<tr>${can ? `<td><input type="checkbox" data-act="ipamPick" data-id="${m.id}"${ipamPick.has(m.id) ? ' checked' : ''} aria-label="${esc(m.name)} auswählen"></td>` : ''}` +
+      `<td><a href="#" data-act="show" data-id="${m.id}">${esc(m.name)}</a></td><td class="mono">${esc(m.ip)}</td>` +
+      `<td>${can ? `<input class="iname" data-id="${m.id}" value="${esc(ipamNames[m.id] ?? m.suggest)}" spellcheck="false">` : esc(m.suggest)}<span class="muted">.${esc(ipamNames._dom ?? I.domain)}</span></td>` +
+      `<td class="muted">${m.dhcp_name ? `meldet sich per DHCP als „${esc(m.dhcp_name)}“` : ''}</td></tr>`).join('') + '</table></div>';
+  if (can) h += `<div class="ibulk"><button class="btn pri" data-act="ipamDnsAdd"${ipamPick.size ? '' : ' disabled'}>${ipamPick.size ? `${ipamPick.size} DNS-Einträge anlegen` : 'Geräte auswählen'}</button>` +
+    `<span class="muted">Legt A-Einträge in ${I.dns_target ? SRC[I.dns_target] : '–'} an und lädt den Dienst neu.</span></div>`;
+  return h;
+}
+function ipamCellPanel(ip) {
+  ipamCellIp = ip;
+  const [s, c] = ipamCell(ip), can = ipamCan();
+  const row = (k, v) => v ? `<div class="kv"><span>${k}</span><div>${v}</div></div>` : '';
+  const mac = c && ((c.devs.length && (dev(c.devs[0].id) || {}).mac) || (c.arp && c.arp.mac) || (c.lease && c.lease.mac) || (c.res && c.res.mac)) || '';
+  let h = `<div class="phead"><h2 class="mono">${esc(ip)}</h2>${closeBtn}</div>`;
+  h += `<p class="muted" style="margin:0 0 12px">${s ? `${esc(s.name)} · ${esc(s.subnet)}` : 'außerhalb der dokumentierten Netze'}${c && c.pool ? ' · im DHCP-Bereich' : ''}</p>`;
+  if (!c) h += '<div class="hint">Frei – kein Gerät, keine Reservierung, kein DNS-Eintrag und nicht im Netz gesehen.</div>';
+  else {
+    h += row('Gerät', c.devs.map(d => `<a href="#" data-act="show" data-id="${d.id}">${esc(d.name)}</a>${d.primary ? '' : ` <span class="muted">(weitere Adresse${d.label ? ': ' + esc(d.label) : ''})</span>`}`).join('<br>') || (c.gw ? 'Gateway des Netzes' : '<span class="muted">nicht dokumentiert</span>'));
+    h += row('DNS', c.dns.map(esc).join('<br>') || '<span class="muted">kein Eintrag</span>');
+    h += row('Reservierung', c.res ? `${esc(c.res.mac)}${c.res.hostname ? ' · ' + esc(c.res.hostname) : ''} <span class="muted">(${SRC[c.res.src]})</span>` +
+      (can && c.res.uuid ? ` <button class="btn sm bad" data-act="ipamResDel" data-u="${esc(c.res.uuid)}" data-ip="${esc(ip)}">Löschen</button>` : '') : '');
+    h += row('Lease', c.lease ? `${esc(c.lease.mac)}${c.lease.hostname ? ' · ' + esc(c.lease.hostname) : ''} · ${c.lease.static ? 'fest' : 'dynamisch'}${c.lease.active ? '' : ' · abgelaufen'}` : '');
+    h += row('ARP', c.arp ? `${esc(c.arp.mac)}${c.arp.hostname ? ' · ' + esc(c.arp.hostname) : ''}${c.arp.intf ? ' · ' + esc(c.arp.intf) : ''}` : '');
+    h += c.issues.map(i => `<div class="iss bad" style="margin-top:8px"><span>${esc(i[1])}</span></div>`).join('');
+  }
+  const acts = [];
+  if (!ro() && (!c || !c.devs.length) && !(c && c.gw)) acts.push(`<button class="btn" data-act="ipamNewDev" data-ip="${esc(ip)}">Als Gerät anlegen</button>`);
+  if (can && IPAM.dns_target && (!c || !c.dns.length)) acts.push(`<button class="btn" data-act="ipamDnsOne" data-ip="${esc(ip)}">DNS-Eintrag anlegen</button>`);
+  if (can && IPAM.dhcp_target && c && !c.res && mac && !c.gw) acts.push(`<button class="btn" data-act="ipamResAdd" data-ip="${esc(ip)}" data-mac="${esc(mac)}">DHCP-Reservierung anlegen</button>`);
+  if (acts.length) h += `<div class="acts" style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap">${acts.join('')}</div>`;
+  if (!can && !ro() && c && !IPAM.write) h += '<p class="muted" style="font-size:12.5px;margin-top:14px">DNS-Einträge und Reservierungen lassen sich anlegen, sobald in der OPNsense-Anbindung Änderungen erlaubt sind.</p>';
+  openPanel(h, 'ipam');
+  main.querySelectorAll('.ic.sel').forEach(n => n.classList.remove('sel'));
+  const n = main.querySelector(`.ic[data-ip="${ip}"]`); if (n) n.classList.add('sel');
+}
+const ipamDevName = (ip, c) => { const x = c && c.devs[0] && dev(c.devs[0].id); return x ? (x.hostname || x.name) : (c && ((c.lease && c.lease.hostname) || (c.arp && c.arp.hostname) || (c.res && c.res.hostname))) || ''; };
+const ipamSlug = s => (s || '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').split('.')[0].replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63);
+main.addEventListener('input', e => {
+  if (e.target.id === 'ipamDom') { ipamNames._dom = e.target.value.trim(); main.querySelectorAll('.imiss .muted').forEach(n => { if (n.textContent.startsWith('.')) n.textContent = '.' + ipamNames._dom; }); }
+  else if (e.target.classList.contains('iname')) ipamNames[+e.target.dataset.id] = e.target.value.trim();
+});
 // ---------- eigene Links im Seitenmenü: mit oder ohne Kategorie, Kategorien einklappbar (je Browser gemerkt)
 const NAV_LINK_ICO = '<svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.700 0l3-3a4 4 0 0 0-5.700-5.700l-1 1M14 10a4 4 0 0 0-5.700 0l-3 3a4 4 0 0 0 5.700 5.700l1-1"/></svg>';
 const navClosed = v => { try { if (v === undefined) return JSON.parse(localStorage.getItem('labvis.navgrp') || '[]'); localStorage.setItem('labvis.navgrp', JSON.stringify(v)); } catch (e) { /* ohne Speicher bleibt alles offen */ } return []; };
@@ -1440,7 +1646,7 @@ function navEditPanel() {
     `Links mit derselben Kategorie stehen im Menü als aufklappbare Gruppe; sie öffnen in einem neuen Tab.</p><button class="btn pri" data-act="newNav">+ Link</button>` +
     (navGroups().sort((a, b) => (b[0] === '') - (a[0] === '')).map(([g, ls]) => `<h3>${g ? esc(g) : 'Ohne Kategorie'}</h3>` + ls.map(row).join('')).join('') || '<div class="hint" style="margin-top:12px">Noch keine Links.</div>') + '</div>', 'nav');
 }
-let navBack = false;
+let navBack = false, ipamBack = null;
 function navForm(l) {
   const isNew = !l.id, withUrl = S.devices.filter(d => d.url && /^https?:\/\//i.test(d.url)).sort((a, b) => a.name.localeCompare(b.name));
   openForm(isNew ? 'Neuer Link' : esc(l.label), [
@@ -1464,7 +1670,7 @@ function navForm(l) {
     $('[name=icon]', f).dispatchEvent(new Event('input', {bubbles: true}));
   });
 }
-const READ_OK = new Set(['monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
+const READ_OK = new Set(['ipamTab', 'ipamNet', 'ipamDnsFilter', 'ipamCellOpen', 'ipamCopy', 'ipamShow', 'monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {

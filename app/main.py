@@ -11,14 +11,14 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, connectors, db, importer, monitor, scanner
+from . import auth, connectors, db, importer, ipam, monitor, scanner
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.19.1"
+VERSION = "0.20.0"
 
 
 def _build_id():
@@ -58,6 +58,7 @@ app = FastAPI(title="LabVis", docs_url="/api/docs", openapi_url="/api/openapi.js
 app.middleware("http")(auth.middleware)
 app.include_router(auth.router)
 app.include_router(monitor.router)
+app.include_router(ipam.router)
 
 
 def _scheduler():
@@ -187,6 +188,7 @@ def remove(table: str, rid: int):
     elif table == "integrations":
         db.x("UPDATE devices SET integration_id=NULL, ext_id=NULL WHERE integration_id=?", (rid,))
         db.x("DELETE FROM integrations WHERE id=?", (rid,))
+        db.x("DELETE FROM opn_cache WHERE integration_id=?", (rid,))
     elif table in ("links", "discoveries", "navlinks"):
         db.x(f"DELETE FROM {table} WHERE id=?", (rid,))
     else:
