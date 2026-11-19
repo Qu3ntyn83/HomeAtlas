@@ -88,6 +88,23 @@ als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links*
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
 | **System** | Intervalle, SNMP-Community, Export/Import. |
 
+## IPAM & DNS
+
+Die Seite **IPAM & DNS** verbindet die Dokumentation mit dem, was die OPNsense weiß: DNS-Einträge (Unbound-Host-Overrides oder
+Dnsmasq-Hosts), DHCP-Leases und -Reservierungen (Kea, Dnsmasq, lesend auch ISC DHCP) und die ARP-Tabelle. Gelesen wird beim
+Abgleich der OPNsense-Anbindung.
+
+- **Adressen:** je Netz eine Adresskarte – dokumentiert, nicht dokumentiert (im Netz gesehen), Gateway, Reservierung, nur DNS,
+  DHCP-Bereich – mit Belegung, nächster freier Adresse außerhalb des DHCP-Bereichs und Hinweisen.
+- **Konflikte:** mehrere Geräte mit derselben Adresse, Reservierung oder ARP-Antwort mit anderer MAC als dokumentiert,
+  feste Adresse im DHCP-Bereich ohne Reservierung.
+- **DNS:** jeder Eintrag mit Abgleich (passt · Adresse veraltet · kein Gerät · doppelt) und die Liste der Geräte ohne DNS-Eintrag.
+- **Schreiben:** Mit dem Haken „Änderungen … erlauben" in der Anbindung legt LabVis DNS-Einträge an, ändert und löscht sie und
+  legt DHCP-Reservierungen an (Kea oder Dnsmasq; ISC DHCP hat dafür keine Schnittstelle). Danach lädt LabVis den Dienst neu.
+
+Der API-Benutzer der OPNsense braucht Leserechte auf Unbound/Dnsmasq, Kea und die ARP-Tabelle, zum Schreiben zusätzlich Schreibrechte
+auf diese Dienste. Benutzer mit Leserecht in LabVis sehen alles, ändern aber nichts.
+
 ## Überwachung
 
 Aus der Dokumentation wird mit einem Klick ein Monitoring: **Überwachung → Aus Dokumentation erzeugen** legt je Gerät mit IP einen

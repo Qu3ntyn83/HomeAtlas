@@ -34,9 +34,12 @@ KINDS = {
                        "„- /var/run/docker.sock:/var/run/docker.sock:ro“ stehen (in der aktuellen Vorlage enthalten). "
                        "Für andere Hosts die Adresse einer freigegebenen Docker-API oder eines docker-socket-proxy eintragen."},
     "snmp": {"label": "SNMP v2c", "fields": [["host", "Host/IP"], ["community", "Community", "public", "password"]]},
-    "opnsense": {"label": "OPNsense (experimentell)", "fields": [
+    "opnsense": {"label": "OPNsense", "fields": [
         ["host", "Host/IP oder URL (https://firewall:8443)"], ["port", "Port der Weboberfläche (80 = ohne TLS)", "443"], ["key", "API-Key"],
-        ["secret", "API-Secret", "", "password"]]},
+        ["secret", "API-Secret", "", "password"], ["write", "Änderungen an DNS-Einträgen und DHCP-Reservierungen erlauben", "", "check"]],
+        "help": "Liest VLANs, DNS-Einträge (Unbound oder Dnsmasq), DHCP-Leases und -Reservierungen (Kea, Dnsmasq, ISC) und die ARP-Tabelle "
+                "für die Seite „IPAM & DNS“. Der API-Benutzer braucht dafür Leserechte auf diese Seiten; zum Anlegen und Ändern "
+                "zusätzlich Schreibrechte und den Haken unten. Ohne TLS (Port 80) gehen API-Schlüssel unverschlüsselt durchs Netz."},
     "qnap": {"label": "QNAP QTS / QuTS hero", "fields": [
         ["host", "Host/IP oder URL (https://nas:443)"], ["port", "Port der Weboberfläche", "443"], ["user", "Benutzer (Administratorgruppe)"],
         ["password", "Passwort", "", "password"]],
@@ -492,22 +495,63 @@ def apply_lldp(dev_id, ifaces):
 
 
 # ------------------------------------------------------------------ OPNsense (experimentell)
+class OpnClient:
+    """Zugang zur OPNsense-API. Befehle werden in der neuen Schreibweise (search_host_override) aufgerufen; ältere
+    Versionen kennen nur camelCase (searchHostOverride) – darauf wird bei 404 ausgewichen."""
+
+    def __init__(self, c):
+        scheme, host, port = endpoint(c, 443)
+        if not c.get("key") or not c.get("secret"):
+            raise RuntimeError("API-Key und API-Secret fehlen (OPNsense: System → Zugang → Benutzer → API-Schlüssel)")
+        reach(host, port)
+        self.hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['key'].strip()}:{c['secret'].strip()}".encode()).decode(),
+                    "Accept": "application/json"}
+        if scheme == "https" and "://" not in (c.get("host") or ""):      # Weboberfläche ohne TLS auf einem anderen Port: selbst erkennen
+            try:
+                _get(f"https://{host}:{port}/api/core/firmware/status", self.hdr, timeout=8)
+            except urllib.error.URLError as e:
+                if isinstance(e.reason, ssl.SSLError) and not isinstance(e, urllib.error.HTTPError):
+                    scheme = "http"
+            except Exception:  # noqa: BLE001 – alles andere klärt der eigentliche Abruf
+                pass
+        self.base = f"{scheme}://{host}:{port}/api"
+        self.write = str(c.get("write") or "").lower() in ("1", "true", "on", "yes")
+
+    @staticmethod
+    def _alts(path):
+        seg = path.split("/")                     # ['', modul, controller, befehl, (uuid)]
+        if len(seg) > 3 and "_" in seg[3]:
+            camel = seg[3].split("_")[0] + "".join(w.title() for w in seg[3].split("_")[1:])
+            return [path, "/".join(seg[:3] + [camel] + seg[4:])]
+        return [path]
+
+    def _req(self, path, body=None, timeout=20):
+        data = json.dumps(body).encode() if body is not None else None
+        h = dict(self.hdr, **({"Content-Type": "application/json"} if data is not None else {}))
+        req = urllib.request.Request(self.base + path, data=data, headers=h, method="POST" if data is not None else "GET")
+        with _OPENER.open(req, timeout=timeout) as r:
+            raw = r.read().decode()
+        return json.loads(raw) if raw.strip() else {}
+
+    def call(self, path, body=None, timeout=20):
+        err = None
+        for p in self._alts(path):
+            try:
+                return self._req(p, body, timeout)
+            except urllib.error.HTTPError as e:
+                err = e
+                if e.code != 404:
+                    break
+        raise err
+
+    def search(self, path):
+        r = self.call(path, {"current": 1, "rowCount": -1, "searchPhrase": ""})
+        return r.get("rows", []) if isinstance(r, dict) else (r or [])
+
+
 def sync_opnsense(integ):
-    c = integ["config"]
-    scheme, host, port = endpoint(c, 443)
-    if not c.get("key") or not c.get("secret"):
-        raise RuntimeError("API-Key und API-Secret fehlen (OPNsense: System → Zugang → Benutzer → API-Schlüssel)")
-    reach(host, port)
-    hdr = {"Authorization": "Basic " + base64.b64encode(f"{c['key'].strip()}:{c['secret'].strip()}".encode()).decode()}
-    if scheme == "https" and "://" not in (c.get("host") or ""):      # Weboberfläche ohne TLS auf einem anderen Port: selbst erkennen
-        try:
-            _get(f"https://{host}:{port}/api/core/firmware/status", hdr, timeout=8)
-        except urllib.error.URLError as e:
-            if isinstance(e.reason, ssl.SSLError) and not isinstance(e, urllib.error.HTTPError):
-                scheme = "http"
-        except Exception:  # noqa: BLE001 – alles andere klärt der eigentliche Abruf
-            pass
-    base = f"{scheme}://{host}:{port}/api"
+    cli = OpnClient(integ["config"])
+    base, hdr = cli.base, cli.hdr
 
     def first(*paths):
         err = None
@@ -548,9 +592,10 @@ def sync_opnsense(integ):
             cnt = db.one("SELECT count(*) c FROM vlans")["c"]
             db.insert("vlans", {**data, "color": PALETTE[cnt % len(PALETTE)]})
         n += 1
-    if not n:
-        return "verbunden, aber keine VLANs angelegt (Schnittstellen → Andere Typen → VLAN)"
-    return f"{n} VLANs"
+    from . import ipam                                # DNS, DHCP und ARP für IPAM – Fehler dort brechen den VLAN-Abgleich nicht ab
+    extra = ipam.fetch(integ, cli)
+    head = f"{n} VLANs" if n else "verbunden, keine VLANs angelegt"
+    return head + (" · " + extra if extra else "")
 
 
 # ------------------------------------------------------------------ gemeinsame Übernahme für NAS und BMC
