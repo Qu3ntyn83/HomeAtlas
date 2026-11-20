@@ -88,6 +88,18 @@ als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links*
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
 | **System** | Intervalle, SNMP-Community, Export/Import. |
 
+## Verbindungsarten
+
+Neben Kabel, WLAN, API und logisch kennt LabVis die gängigen Smarthome-Wege: **Zigbee, Z-Wave, Thread, Matter, Bluetooth/BLE,
+DECT ULE, Homematic IP, EnOcean, Funk 433/868 MHz, LoRa, Infrarot, MQTT, KNX, Feldbus** (RS-485, Modbus, 1-Wire) und **USB/seriell**
+(z. B. ein Funkstick am Home-Assistant-Host). Funk wird gepunktet, Busse gestrichelt, MQTT mit Pfeil zum Broker gezeichnet, jede Art
+in eigener Farbe und mit Namen an der Linie; die Legende zeigt die verwendeten Arten. Das Formular blendet nur die passenden Felder ein
+(Geschwindigkeit, VLAN und Trunk nur bei Kabel).
+
+Geräte, die als Chip unter einer Bridge hängen, tragen ihre **Vernetzung** (z. B. Zigbee über die Hue Bridge) als farbige Marke. Der
+Home-Assistant-Import setzt sie aus der Integration (Hue, ZHA, deCONZ → Zigbee, Z-Wave JS → Z-Wave, FRITZ!Box → DECT, Homematic IP …);
+im Gerät lässt sie sich ändern.
+
 ## Gerätetypen & Icons
 
 Unter **System → Typen & Icons verwalten** lässt sich jeder Gerätetyp anpassen: Bezeichnung, Icon, Bereich (wo er in Überwachung und

@@ -501,3 +501,8 @@ select[multiple] option[hidden]{display:none}
 .tsys .tprev img{object-fit:contain;opacity:.85}
 .ihup{margin:6px 0}
 @media (hover:none){.idrop .itm .btn{opacity:1}}
+#legend i.lk{height:0;background:none;border-radius:0}
+#legend i.lk.radio{border-top:3px dotted var(--c)}
+#legend i.lk.bus{height:2px;background:repeating-linear-gradient(90deg,var(--c) 0 11px,transparent 11px 14px,var(--c) 14px 16px,transparent 16px 19px)}
+#legend i.lk.arrow{border-top:2px dashed var(--c)}
+#legend i.lk.logical{height:2px;background:repeating-linear-gradient(90deg,var(--c) 0 9px,transparent 9px 13px,var(--c) 13px 15px,transparent 15px 19px)}
