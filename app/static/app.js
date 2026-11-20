@@ -13,7 +13,45 @@ const PASSIVE = new Set(['patchpanel', 'shelf', 'blank', 'cablemgmt']);   // Rac
 const onShelf = id => S.devices.filter(d => (d.meta || {}).shelf === id);
 const shelfOf = d => { const sh = dev((d.meta || {}).shelf); return sh && sh.type === 'shelf' && sh.rack_id ? sh : null; };
 const API_COL = '#d2a8ff';
-const KINDS = [['cable', 'Kabel'], ['wlan', 'WLAN (Funk)'], ['api', 'API / Datenabfrage'], ['logical', 'logisch (VPN, Cloud)']];
+// Verbindungsarten. style: line = Kabel (VLAN-Farbe, Breite = Tempo), radio = Funk (gepunktet), bus = Feldbus/seriell (gestrichelt),
+// arrow = Abfrage/Nachrichten mit Pfeil, logical = logisch. short erscheint als Beschriftung an der Verbindung.
+const LK = {
+  cable: {label: 'Kabel (Ethernet)', style: 'line'},
+  wlan: {label: 'WLAN', style: 'radio', short: 'WLAN'},
+  api: {label: 'API / Datenabfrage', style: 'arrow', short: 'API', col: '#d2a8ff'},
+  logical: {label: 'logisch (VPN, Cloud)', style: 'logical'},
+  zigbee: {label: 'Zigbee', style: 'radio', short: 'Zigbee', col: '#f0b72f', home: 1},
+  zwave: {label: 'Z-Wave', style: 'radio', short: 'Z-Wave', col: '#39c5cf', home: 1},
+  thread: {label: 'Thread', style: 'radio', short: 'Thread', col: '#bc8cff', home: 1},
+  matter: {label: 'Matter (über WLAN/Ethernet/Thread)', style: 'logical', short: 'Matter', col: '#56d364', home: 1},
+  ble: {label: 'Bluetooth / BLE', style: 'radio', short: 'BLE', col: '#4f9dff', home: 1},
+  dect: {label: 'DECT ULE (FRITZ!Smart Home)', style: 'radio', short: 'DECT', col: '#ff7b72', home: 1},
+  homematic: {label: 'Homematic IP / BidCoS', style: 'radio', short: 'HmIP', col: '#79c0ff', home: 1},
+  enocean: {label: 'EnOcean', style: 'radio', short: 'EnOcean', col: '#7ee787', home: 1},
+  rf: {label: 'Funk 433/868 MHz', style: 'radio', short: '433/868', col: '#e3b341', home: 1},
+  lora: {label: 'LoRa / LoRaWAN', style: 'radio', short: 'LoRa', col: '#db61a2', home: 1},
+  ir: {label: 'Infrarot', style: 'radio', short: 'IR', col: '#f778ba', home: 1},
+  mqtt: {label: 'MQTT (Nachrichten über Broker)', style: 'arrow', short: 'MQTT', col: '#a5d6ff', home: 1},
+  knx: {label: 'KNX (Bus)', style: 'bus', short: 'KNX', col: '#3fb950', home: 1},
+  bus: {label: 'Feldbus (RS-485, Modbus, 1-Wire)', style: 'bus', short: 'Bus', col: '#a8b3bf', home: 1},
+  usb: {label: 'USB / seriell (z. B. Funkstick)', style: 'bus', short: 'USB', col: '#c9d1d9', home: 1},
+};
+LK.wan = {label: 'Internetzugang (WAN)', style: 'wan', short: 'WAN', col: '#ffa657'};
+const KINDS = ['cable', 'wan', ...Object.keys(LK).filter(k => k !== 'cable' && k !== 'wan')].map(k => [k, LK[k].label]);
+// Internetzugang (ISP) eines Internet-Geräts
+const ACCESS = {fiber: ['Glasfaser (FTTH)', 'Glasfaser'], vdsl: ['VDSL / Supervectoring', 'VDSL'], adsl: ['ADSL', 'ADSL'], cable: ['Kabel (DOCSIS)', 'Kabel'],
+  lte: ['LTE', 'LTE'], '5g': ['5G', '5G'], sat: ['Satellit (z. B. Starlink)', 'Satellit'], wisp: ['Richtfunk', 'Richtfunk'], other: ['sonstiger', '']};
+const IP4MODE = {dynamic: 'dynamisch', static: 'statisch', cgnat: 'CGNAT (geteilte IPv4)', dslite: 'DS-Lite (IPv4 über IPv6)', none: 'keine IPv4'};
+const isNet = d => d && bt(d.type) === 'internet';
+const ispOf = d => (d && d.meta && d.meta.isp) || {};
+const liveOf = d => (d && d.meta && d.meta.isp_live) || null;
+const bwTxt = i => i.down || i.up ? `${i.down || '?'}/${i.up || '?'} Mbit/s` : '';
+const mbit = n => n >= 1000 && n % 1000 === 0 ? n / 1000 + ' Gbit/s' : n + ' Mbit/s';
+const liveTxt = L => !L ? '' : L.status === 'down' || L.status === 'force_down' ? 'offline' : [L.delay != null ? Math.round(L.delay) + ' ms' : '', L.loss ? L.loss + ' % Verlust' : ''].filter(Boolean).join(' · ') || 'online';
+const lkOf = l => LK[l.kind] || LK.cable;
+// Farbe einer Verbindung: Kabel nach VLAN, WLAN nach SSID-Netz, sonst feste Farbe der Art
+const lkCol = (l, vlanCol) => l.kind === 'wlan' ? wcol(l) : l.kind === 'logical' ? PAL.MUTED : (LK[l.kind] && LK[l.kind].col) || vlanCol;
+const lkName = (l, me) => { const k = lkOf(l); if (l.kind === 'cable' || !LK[l.kind]) return null; if (k.style === 'arrow') return me == null ? k.short : (l.a_id === me ? k.short + ' →' : '← ' + k.short); return k.short || k.label; };
 const BANDS = ['2,4 GHz', '5 GHz', '6 GHz', '2,4 + 5 GHz', '2,4 + 5 + 6 GHz'], SECS = ['WPA2', 'WPA2/WPA3', 'WPA3', 'WPA-Enterprise', 'offen'];
 const TAB = 30, PAD = 16, GAP = 10;
 
@@ -186,13 +224,13 @@ function chipSvg(c, x, y, w, parentVlan) {
   const h = chipH(c), col = vcol(c.vlan_id), gk = kidsOf(c.id);
   const stroke = c.vlan_id && c.vlan_id !== parentVlan ? col : PAL.BORDER;
   const off = (vfilter && !inVlan(c, vfilter) ? ' off' : '') + (multi.has(c.id) ? ' msel' : '');
-  const tag = c.meta && c.meta.vmid ? (c.type === 'vm' ? 'VM ' : 'CT ') + c.meta.vmid : '';
+  const pr = c.meta && LK[c.meta.proto], tag = c.meta && c.meta.vmid ? (c.type === 'vm' ? 'VM ' : 'CT ') + c.meta.vmid : pr ? pr.short : '';
   const tagW = tag ? tw(tag, 10.5, 400, true) + 8 : 0;
   let s = `<g class="chip${off}" data-id="${c.id}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">` +
     `<rect class="cb" width="${w.toFixed(1)}" height="${h}" rx="8" fill="${PAL.CHIP}" stroke="${stroke}" stroke-width="1.2"/>` +
     IMG(c.icon || typeIcon(c.type), 10, 11, 22) +
     T(40, 21, fit(c.name, w - 62 - tagW, 13.5, 600), {size: 13.5, weight: 600}) +
-    (tag ? T(w - 22, 20, tag, {size: 10.5, fill: PAL.FAINT, mono: true, anchor: 'end'}) : '') +
+    (tag ? T(w - 22, 20, tag, {size: 10.5, fill: pr && !(c.meta || {}).vmid ? pr.col : PAL.FAINT, mono: true, anchor: 'end'}) : '') +
     statusDot(c, w - 11, 16, 3.6) +
     T(40, 36, fit(c.note || c.os || TYPES[c.type] || '', w - 50, 11, 400), {size: 11, fill: PAL.MUTED});
   if (c.ip || c.hostname) {
@@ -227,11 +265,22 @@ function buildCard(d) {
   const tabW = Math.round(tw(d.name, 19, 700) + tw('\u00a0·\u00a0' + type, 13, 500) + 44);
   const extra = addrsOf(d).length;
   const grp = d.type === 'group', on = kids.filter(k => k.status === 'online').length;
-  const addr = grp ? '' : [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
-  const l1 = grp ? (d.note || `${kids.length} ${kids.length === 1 ? 'Gerät' : 'Geräte'}`) : d.model || d.note || '';
-  const l3 = grp ? (kids.length ? `${d.note ? kids.length + ' Geräte · ' : ''}${on} online` : 'noch leer – Geräte auswählen und „Gruppieren“') : d.os || (d.model ? d.note : '') || '';
+  let addr = grp ? '' : [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
+  let l1 = grp ? (d.note || `${kids.length} ${kids.length === 1 ? 'Gerät' : 'Geräte'}`) : d.model || d.note || '';
+  let l3 = grp ? (kids.length ? `${d.note ? kids.length + ' Geräte · ' : ''}${on} online` : 'noch leer – Geräte auswählen und „Gruppieren“') : d.os || (d.model ? d.note : '') || '';
+  const isp = isNet(d) ? ispOf(d) : null, L = isNet(d) ? liveOf(d) : null, ispPills = [];
+  if (isp) {
+    const pub = (L && L.wan_ip && !L.nat) ? L.wan_ip : isp.ip || '';
+    l1 = isp.provider || l1 || 'Internet';
+    addr = [pub, isp.ip4 && isp.ip4 !== 'dynamic' ? IP4MODE[isp.ip4].split(' (')[0] : L && L.cgnat ? 'CGNAT' : L && L.nat ? 'hinter NAT' : ''].filter(Boolean).join(' · ') || d.ip || '';
+    l3 = [isp.access && ACCESS[isp.access] ? ACCESS[isp.access][1] : '', bwTxt(isp)].filter(Boolean).join(' · ') || l3;
+    if (L) ispPills.push({t: [isp.gateway, liveTxt(L)].filter(Boolean).join(' · '), c: L.status === 'down' || L.status === 'force_down' ? '#f85149' : L.status === 'none' ? '#3fb950' : '#d29922', dot: 1});
+    if (isp.dyndns) ispPills.push({t: isp.dyndns, c: PAL.MUTED});
+    if (isp.ip6) ispPills.push({t: 'IPv6 ' + isp.ip6, c: PAL.MUTED});
+  }
   const headW = Math.max(70 + Math.max(tw(l1, 14, 500), tw(addr, 12.5, 400, true), tw(l3, 12)) + 40,
-    ssidsOf(d.id).reduce((a, w) => a + tw(w.ssid, 11.5, 500, true) + 40, 0) + 2 * PAD);
+    ssidsOf(d.id).reduce((a, w) => a + tw(w.ssid, 11.5, 500, true) + 40, 0) + 2 * PAD,
+    ispPills.reduce((a, p) => a + tw(p.t, 11.5, 500, true) + (p.dot ? 34 : 22), 0) + 2 * PAD);
   // Blöcke: Gruppen (falls vorhanden) bleiben zusammen, sonst jeder Chip einzeln
   const blocks = [];
   const grouped = kids.some(k => k.meta && k.meta.group);
@@ -259,6 +308,16 @@ function buildCard(d) {
   s += T(70, TAB + 29, l1, {size: 14, weight: 500}) + T(70, TAB + 47, addr, {size: 12.5, mono: true, fill: d.vlan_id ? col : PAL.MUTED}) +
     T(70, TAB + 63, l3, {size: 12, fill: PAL.MUTED});
   let y = TAB + 80;
+  if (ispPills.length) {
+    let px = PAD;
+    for (const p of ispPills) {
+      const pw = tw(p.t, 11.5, 500, true) + (p.dot ? 32 : 20);
+      s += `<rect x="${px}" y="${y - 2}" width="${pw.toFixed(1)}" height="22" rx="11" fill="${PAL.CHIP}" stroke="${p.c}" stroke-width="1.2"/>` +
+        (p.dot ? `<circle cx="${px + 13}" cy="${y + 9}" r="3.6" fill="${p.c}"/>` : '') + T(px + (p.dot ? 23 : 10), y + 13, p.t, {size: 11.5, weight: 500, mono: true, fill: p.dot ? PAL.TEXT : p.c});
+      px += pw + 6;
+    }
+    y += 30;
+  }
   const ssids = ssidsOf(d.id);
   if (ssids.length) {
     let px = PAD;
@@ -296,7 +355,7 @@ function buildCard(d) {
     for (const c of b.chips) { s += chipSvg(c, bx, colY[ci], cw, d.vlan_id); colY[ci] += chipH(c) + 8; }
     if (b.title) colY[ci] += 6;
   }
-  const minH = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
+  const minH = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || ispPills.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
   const h = canResize(d) && own.h > 0 ? Math.max(minH, Math.round(own.h)) : minH;
   s = folder(w, h, tabW, stroke, grp) + s;
   if (canResize(d)) s += `<g class="rz" data-rz="${d.id}"><title>Größe ziehen · Doppelklick: automatische Größe</title><rect x="${w - 30}" y="${h - 30}" width="30" height="30" fill="transparent"/>` +
@@ -350,9 +409,15 @@ function linksSvg() {
     const d = rounded(pts, 12), w = SPEED_W[l.speed] || 2.4, col = l.vlan_id ? vcol(l.vlan_id) : PAL.LINK;
     const off = vfilter && !l.trunk && l.vlan_id !== vfilter ? ' off' : '';
     let p;
-    if (l.kind === 'api') p = `<path class="core" d="${d}" fill="none" stroke="${API_COL}" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr)"/>`;
-    else if (l.kind === 'wlan') p = `<path class="core" d="${d}" fill="none" stroke="${wcol(l)}" stroke-width="3.2" stroke-dasharray="0.1 8" stroke-linecap="round" stroke-linejoin="round"/>`;
-    else if (l.kind === 'logical') p = `<path class="core" d="${d}" fill="none" stroke="${PAL.MUTED}" stroke-width="1.6" stroke-dasharray="2 6" stroke-linecap="round"/>`;
+    const k = lkOf(l), kc = lkCol(l, col);
+    const netEnd = isNet(A.d) ? A.d : isNet(B.d) ? B.d : null, wi = netEnd ? ispOf(netEnd) : {};
+    if (k.style === 'wan') p = ['lte', '5g', 'sat', 'wisp'].includes(wi.access)
+      ? `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="4" stroke-dasharray="0.1 9" stroke-linecap="round" stroke-linejoin="round"/>`
+      : `<path d="${d}" fill="none" stroke="${kc}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path class="core" d="${d}" fill="none" stroke="${PAL.BG}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+    else if (k.style === 'arrow') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-${l.kind === 'api' ? 'api' : esc(l.kind)})"/>`;
+    else if (k.style === 'radio') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="${l.kind === 'wlan' ? 3.2 : 2.8}" stroke-dasharray="0.1 ${l.kind === 'wlan' ? 8 : 6}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    else if (k.style === 'bus') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="2.2" stroke-dasharray="11 3 2 3" stroke-linejoin="round"/>`;
+    else if (k.style === 'logical') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="1.6" stroke-dasharray="${l.kind === 'logical' ? '2 6' : '9 4 2 4'}" stroke-linecap="round"/>`;
     else if (l.trunk) p = `<path d="${d}" fill="none" stroke="${PAL.TRUNK}" stroke-width="${w + 3.4}" stroke-linecap="round" stroke-linejoin="round"/>` +
       `<path class="core" d="${d}" fill="none" stroke="${PAL.BG}" stroke-width="${Math.max(w - 1, 1)}" stroke-linecap="round" stroke-linejoin="round"/>`;
     else p = `<path class="core" d="${d}" fill="none" stroke="${col}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
@@ -365,8 +430,10 @@ function linksSvg() {
         T(tx, ty, txt, {size: 10.5, weight: 500, mono: true, fill: c, anchor});
     };
     const sb = {b: 't', t: 'b', r: 'l', l: 'r'}[sa];
-    const api = l.kind === 'api', lcol = api ? API_COL : l.kind === 'wlan' ? wcol(l) : l.kind === 'logical' ? PAL.MUTED : l.trunk ? PAL.TRUNK : col;
-    const btag = api ? ['API', l.note, l.b_port].filter(Boolean).join(' · ') : l.kind === 'wlan' ? ['WLAN', (wlan(l.wlan_id) || {}).ssid, l.note].filter(Boolean).join(' · ') : l.kind === 'logical' ? (l.note || '') : [l.speed, l.b_port].filter(Boolean).join(' · ');
+    const lcol = l.kind === 'cable' || !LK[l.kind] ? (l.trunk ? PAL.TRUNK : col) : kc;
+    const btag = l.kind === 'wlan' ? ['WLAN', (wlan(l.wlan_id) || {}).ssid, l.note].filter(Boolean).join(' · ') : l.kind === 'logical' ? (l.note || '')
+      : l.kind === 'cable' || !LK[l.kind] ? [l.speed, l.b_port].filter(Boolean).join(' · ')
+      : l.kind === 'wan' ? [wi.access && ACCESS[wi.access] ? ACCESS[wi.access][1] : 'WAN', bwTxt(wi), l.note].filter(Boolean).join(' · ') : [k.short, l.note, l.b_port].filter(Boolean).join(' · ');
     out += `<g class="link${off}" data-link="${l.id}" data-a="${A.id}" data-b="${B.id}">${p}<path class="hit" d="${d}"/>` +
       tagAt(pb, sb, btag, lcol, pbi) + tagAt(pa, sa, l.a_port || '', lcol, pai) + '</g>';
   }
@@ -473,11 +540,13 @@ function renderTopo() {
     cards = new Map(tops.map(d => [d.id, buildCard(d)]));
     if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
   }
-  main.innerHTML = `<svg id="svg"><defs><marker id="arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${API_COL}"/></marker></defs><g id="world" class="world"><g id="links">${linksSvg()}</g>` +
+  const marker = (id, c) => `<marker id="arr-${id}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${c}"/></marker>`;
+  main.innerHTML = `<svg id="svg"><defs>${Object.entries(LK).filter(([, v]) => v.style === 'arrow').map(([k, v]) => marker(k, v.col)).join('')}</defs><g id="world" class="world"><g id="links">${linksSvg()}</g>` +
     `<g id="cards">${[...cards.values()].map(cardNode).join('')}</g></g></svg>` +
     `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
-    `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span></div>` +
+    `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span>` +
+    [...new Set([...S.links.map(l => l.kind), ...S.devices.map(d => (d.meta || {}).proto)])].filter(k => LK[k] && (LK[k].home || k === 'wan')).map(k => `<i class="lk ${LK[k].style}" style="--c:${LK[k].col}"></i><span>${esc(LK[k].short)}</span>`).join('') + '</div>' +
     `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
     `<div id="tools"><span class="seg"><button class="btn${viewMode === 'normal' ? ' on' : ''}" data-act="viewMode" data-m="normal">Normal</button><button class="btn${viewMode === 'rooms' ? ' on' : ''}" data-act="viewMode" data-m="rooms">Räume</button></span><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
@@ -626,10 +695,11 @@ function showDevice(id, keep) {
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
     fact('Raum', roomOf(d) !== NOROOM && esc(roomOf(d)) + (d.room ? '' : ' <span class="faint">(übernommen)</span>')) +
     fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Beschreibung', esc(d.note)) +
+    fact('Vernetzung', (d.meta || {}).proto && LK[d.meta.proto] && `<span style="color:${LK[d.meta.proto].col}">${esc(LK[d.meta.proto].label)}</span>${d.parent_id && dev(d.parent_id) ? ' über ' + esc(dev(d.parent_id).name) : ''}`) +
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
     fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
-    fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>';
+    fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>' + (isNet(d) ? ispSection(d) : '');
   h += `<h3>Notizen</h3>` + ((d.memo || '').trim() ? `<div class="memo">${esc(d.memo.trim())}</div>` : '<span class="muted" style="font-size:13px">keine</span>') +
     `<div class="acts"><button class="btn sm" data-act="editMemo" data-id="${id}">${(d.memo || '').trim() ? 'Bearbeiten' : 'Notiz schreiben'}</button>` +
     ((d.memo || '').trim() ? `<button class="btn sm" data-act="memoToggle" data-id="${id}" aria-pressed="${d.memo_show ? 'true' : 'false'}">${d.memo_show ? 'Auf der Karte ausblenden' : 'Auf der Karte einblenden'}</button>` : '') + '</div>';
@@ -687,7 +757,7 @@ function showDevice(id, keep) {
   if (links.length) h += '<h3>Verbindungen</h3>' + links.map(l => {
     const o = dev(l.a_id === id ? l.b_id : l.a_id), mp = l.a_id === id ? l.a_port : l.b_port, op = l.a_id === id ? l.b_port : l.a_port;
     return `<div class="rowl">${mp ? `<span class="mono">${esc(mp)}</span><span class="muted">→</span>` : ''}<a href="#" data-act="show" data-id="${o ? o.id : 0}">${esc(o ? o.name : '?')}</a>` +
-      `${op ? `<span class="mono muted">${esc(op)}</span>` : ''}<span class="pill" style="margin-left:auto${l.kind === 'api' ? ';color:' + API_COL : ''}">${l.kind === 'api' ? (l.a_id === id ? 'API →' : '← API') + (l.note ? ' · ' + esc(l.note) : '') : l.kind === 'wlan' ? 'WLAN' + (wlan(l.wlan_id) ? ' · ' + esc(wlan(l.wlan_id).ssid) : '') : l.kind === 'logical' ? 'logisch' : esc(l.speed) + (l.trunk ? ' · Trunk' : '')}</span>` +
+      `${op ? `<span class="mono muted">${esc(op)}</span>` : ''}<span class="pill" style="margin-left:auto${LK[l.kind] && LK[l.kind].col ? ';color:' + LK[l.kind].col : ''}">${lkOf(l).style === 'arrow' ? lkName(l, id) + (l.note ? ' · ' + esc(l.note) : '') : l.kind === 'wlan' ? 'WLAN' + (wlan(l.wlan_id) ? ' · ' + esc(wlan(l.wlan_id).ssid) : '') : l.kind === 'logical' ? 'logisch' : LK[l.kind] && l.kind !== 'cable' ? esc(lkName(l, id)) + (l.note ? ' · ' + esc(l.note) : '') : esc(l.speed) + (l.trunk ? ' · Trunk' : '')}</span>` +
       `<button class="btn sm" data-act="editLink" data-id="${l.id}">✎</button></div>`;
   }).join('');
   if (kids.length) h += `<h3>Enthält (${kids.length})</h3>` + kids.map(k => `<div class="rowl"><span class="dot ${k.status}"></span><a href="#" data-act="show" data-id="${k.id}">${esc(k.name)}</a>` +
@@ -767,13 +837,15 @@ function deviceForm(d) {
     ['name', 'Name'], [['type', 'Typ', 'select', typeOpts(d.type)], ['vlan_id', 'Netzwerk', 'select', vlanOpts()]],
     [['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']], [['hostname', 'Hostname'], ['url', 'Web-URL']],
     [['model', 'Modell'], ['os', 'System']], ['room', 'Raum', 'text', 'z. B. Wohnzimmer, Keller'], ['icon', 'Icon'],
-    ['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['note', 'Kurzbeschreibung (eine Zeile auf der Karte)'],
+    [['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['proto', 'Vernetzung (Smarthome)', 'select', [['', '– keine Angabe –'], ...Object.entries(LK).filter(([, v]) => v.home).map(([k, v]) => [k, v.label])]]],
+    ['note', 'Kurzbeschreibung (eine Zeile auf der Karte)'],
     ['memo', 'Notizen', 'area'], ['memo_show', 'Notizen auf der Karte anzeigen', 'check'],
     [['rack_id', 'Rack', 'select', [['', '– keins –'], ...S.racks.map(r => [r.id, r.name])]], ['rack_u', 'unterste HE', 'number']],
     ['rack_height', 'Höhe in HE', 'number'],
-  ], d, async data => {
+  ], {...d, proto: (d.meta || {}).proto || ''}, async data => {
     if (!data.name) throw new Error('Name fehlt');
     if (data.rack_id && !data.rack_u) data.rack_u = 1;
+    data.meta = {proto: data.proto || null}; delete data.proto;
     if (isNew) { const r = await api('POST', '/api/devices', data); sel = r.id; } else { await api('PUT', '/api/devices/' + d.id, data); sel = d.id; }
   }, '', true);
 }
@@ -783,10 +855,28 @@ function linkForm(l) {
     [['a_id', 'Von (bei API: fragt ab)', 'select', devOpts().slice(1)], ['a_port', 'Port']], [['b_id', 'Nach (bei API: wird abgefragt)', 'select', devOpts().slice(1)], ['b_port', 'Port']],
     [['speed', 'Geschwindigkeit', 'select', Object.keys(SPEED_W).map(s => [s, s])], ['kind', 'Art', 'select', KINDS]],
     ['wlan_id', 'WLAN / SSID (nur bei Art „WLAN“)', 'select', [['', '– keins –'], ...S.wlans.map(w => [w.id, w.ssid])]],
-    ['vlan_id', 'Access-VLAN', 'select', vlanOpts()], ['trunk', 'Trunk (mehrere getaggte VLANs)', 'check'], ['note', 'Notiz / bei API: Protokoll, z. B. REST :8006, SNMP, MQTT'],
-  ], l, async data => {
+    ['vlan_id', 'Access-VLAN', 'select', vlanOpts()], ['trunk', 'Trunk (mehrere getaggte VLANs)', 'check'], ['note', 'Notiz'],
+  ], {kind: 'cable', ...l}, async data => {
+    const k = lkOf(data);
+    if (k.style !== 'line') { data.trunk = 0; if (data.kind !== 'logical') data.vlan_id = null; }
+    if (data.kind !== 'wlan') data.wlan_id = null;
     if (isNew) await api('POST', '/api/links', data); else await api('PUT', '/api/links/' + l.id, data);
   }, isNew ? '' : `<button class="btn bad" type="button" data-act="delLink" data-id="${l.id}">Löschen</button>`, true);
+  const f = $('form', panel), lab = n => { const x = $(`[name=${n}]`, f); return x && x.closest('label'); };
+  const NOTE = {api: 'Protokoll, z. B. REST :8006, SNMP', mqtt: 'Topic oder Broker, z. B. zigbee2mqtt/#', zigbee: 'z. B. Kanal 15, Router/Endgerät', zwave: 'z. B. Node-ID',
+    thread: 'z. B. Border Router, Netzwerkname', wan: 'z. B. Modem/ONT, Leitungs-ID, PPPoE', matter: 'z. B. Fabric, über Thread/WLAN', ble: 'z. B. Proxy, Reichweite', ir: 'z. B. Fernbedienungscode', usb: 'z. B. /dev/ttyUSB0', bus: 'z. B. Adresse, Baudrate'};
+  const sync = () => {
+    const kind = $('[name=kind]', f).value, k = LK[kind] || LK.cable, wire = k.style === 'line';
+    for (const n of ['speed', 'trunk']) { const x = lab(n); if (x) x.hidden = !wire; }
+    if (lab('vlan_id')) lab('vlan_id').hidden = !wire && kind !== 'logical';
+    if (lab('wlan_id')) lab('wlan_id').hidden = kind !== 'wlan';
+    for (const n of ['a_port', 'b_port']) { const x = lab(n); if (x) x.hidden = !(wire || k.style === 'bus' || kind === 'api'); }
+    const a = lab('a_id'), b = lab('b_id');
+    if (a) a.firstChild.textContent = k.style === 'arrow' ? (kind === 'mqtt' ? 'Von (sendet/abonniert)' : 'Von (fragt ab)') : k.home && k.style === 'radio' ? 'Von (Gerät)' : 'Von';
+    if (b) b.firstChild.textContent = k.style === 'arrow' ? (kind === 'mqtt' ? 'Nach (Broker)' : 'Nach (wird abgefragt)') : k.home && k.style === 'radio' ? 'Nach (Bridge, Hub, Koordinator)' : 'Nach';
+    const nt = $('[name=note]', f); if (nt) nt.placeholder = NOTE[kind] || '';
+  };
+  $('[name=kind]', f).addEventListener('change', sync); sync();
 }
 function showLink(id) { const l = S.links.find(x => x.id === id); if (l) linkForm(l); }
 
@@ -1267,6 +1357,11 @@ const ACT = {
     deviceForm({type: 'other', ip: d.ip, mac, name: ipamDevName(d.ip, c), hostname: ipamDevName(d.ip, c), vlan_id: s ? s.vlan_id : '', rack_height: 1});
   },
   ipamShow: d => { const b = $('#side [data-view=ipam]'); b.click(); ipamTab = 'addr'; ipamCellIp = d.ip; const go = () => { if (IPAM) ACT.ipamCellOpen({ip: d.ip}); else setTimeout(go, 200); }; go(); },
+  ispEdit: d => ispForm(dev(+d.id)),
+  ispLink: d => {
+    const net = dev(+d.id), cand = S.devices.filter(x => ['firewall', 'router'].includes(bt(x.type))).sort((a, b) => (bt(a.type) === 'router') - (bt(b.type) === 'router'));
+    linkForm({kind: 'wan', a_id: cand.length ? cand[0].id : '', b_id: net.id});
+  },
   typeEdit: d => typeForm(S.types.find(t => t.key === d.k)),
   typeNew: () => typeForm({}),
   typeDel: d => {
@@ -1483,6 +1578,42 @@ const ACT = {
   },
 };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') navDrawer(false); });
+// ------------------------------------------------------------ Internetzugang (ISP)
+function ispSection(d) {
+  const i = ispOf(d), L = liveOf(d), f = (k, v) => v ? `<dt>${k}</dt><dd>${v}</dd>` : '';
+  const pub = L && L.wan_ip ? `<span class="mono">${esc(L.wan_ip)}</span>${L.nat ? ' <span class="muted">(privat – Router/Modem davor macht NAT)</span>' : L.cgnat ? ' <span class="muted">(CGNAT-Bereich)</span>' : ''}` : i.ip ? `<span class="mono">${esc(i.ip)}</span>` : '';
+  const st = L ? `<span class="dot ${L.status === 'down' || L.status === 'force_down' ? 'offline' : 'online'}"></span> ${esc(L.text || L.status)} · ${esc(liveTxt(L))}` +
+    `<span class="muted"> · ${esc(i.gateway || '')}${L.monitor ? ', prüft ' + esc(L.monitor) : ''} · ${ago(L.at)}</span>` : '';
+  const empty = !i.provider && !i.access && !L;
+  let h = `<h3>Internetzugang</h3>`;
+  if (empty) h += `<p class="muted" style="font-size:12.5px;margin:0 0 8px">Anbieter, Zugangsart, Bandbreite und öffentliche Adresse eintragen. Mit OPNsense-Anbindung kommen Zustand, Latenz und WAN-Adresse von selbst.</p>`;
+  else h += `<dl class="facts">${f('Anbieter', esc(i.provider || ''))}${f('Zugang', i.access && ACCESS[i.access] ? esc(ACCESS[i.access][0]) : '')}` +
+    f('Bandbreite', i.down || i.up ? `↓ ${mbit(+i.down || 0)} · ↑ ${mbit(+i.up || 0)}` : '') + f('Zustand', st) + f('Öffentl. IPv4', pub) +
+    f('IPv4', i.ip4 ? esc(IP4MODE[i.ip4] || i.ip4) : '') + f('IPv6', [i.ip6 ? esc(i.ip6) : '', L && L.wan_ip6 ? `<span class="mono">${esc(L.wan_ip6)}</span>` : ''].filter(Boolean).join(' · ')) +
+    f('DynDNS', i.dyndns ? `<span class="mono">${esc(i.dyndns)}</span>` : '') + f('Modem / ONT', esc(i.modem || '')) +
+    f('Kundennr.', i.customer ? `<span class="mono">${esc(i.customer)}</span>` : '') + f('Hotline', i.hotline ? `<a href="tel:${esc(i.hotline.replace(/[^\d+]/g, ''))}">${esc(i.hotline)}</a>` : '') +
+    f('Vertrag', esc([i.contract_end ? 'Laufzeit bis ' + i.contract_end : '', i.cost ? i.cost + ' € / Monat' : ''].filter(Boolean).join(' · '))) + '</dl>';
+  if (!ro()) h += `<div class="acts"><button class="btn sm" data-act="ispEdit" data-id="${d.id}">${empty ? 'Anschluss eintragen' : 'Anschluss bearbeiten'}</button>` +
+    (S.links.some(l => l.kind === 'wan' && (l.a_id === d.id || l.b_id === d.id)) ? '' : `<button class="btn sm" data-act="ispLink" data-id="${d.id}">WAN-Verbindung anlegen</button>`) + '</div>';
+  return h;
+}
+function ispForm(d) {
+  const i = ispOf(d), gws = S.gateways || [];
+  openForm('Internetzugang · ' + esc(d.name), [
+    [['provider', 'Anbieter', 'text', 'z. B. Telekom, Vodafone, Deutsche Glasfaser'], ['access', 'Zugang', 'select', [['', '–'], ...Object.entries(ACCESS).map(([k, v]) => [k, v[0]])]]],
+    [['down', 'Download (Mbit/s)', 'number'], ['up', 'Upload (Mbit/s)', 'number']],
+    [['ip4', 'IPv4', 'select', [['', '–'], ...Object.entries(IP4MODE)]], ['ip', 'Öffentliche IPv4 (bei statisch)', 'text', 'z. B. 203.0.113.10']],
+    [['ip6', 'IPv6-Präfix', 'text', 'z. B. /56 delegiert'], ['dyndns', 'DynDNS-Name', 'text', 'z. B. home.example.de']],
+    ['gateway', 'OPNsense-Gateway (Zustand, Latenz, WAN-Adresse)', 'select', [['', gws.length ? '– keins –' : '– keine OPNsense-Anbindung –'], ...gws.map(g => [g.name, `${g.name}${g.address ? ' · ' + g.address : ''}`])]],
+    ['modem', 'Modem / ONT', 'text', 'z. B. FRITZ!Box 5590 Fiber im Bridge-Modus'],
+    [['customer', 'Kundennummer'], ['hotline', 'Hotline / Störung', 'text', 'z. B. 0800 330 1000']],
+    [['contract_end', 'Mindestlaufzeit bis', 'text', 'z. B. 03/2027'], ['cost', 'Kosten € / Monat', 'text']],
+  ], i, async data => {
+    for (const k of ['down', 'up']) data[k] = data[k] ? +data[k] : null;
+    await api('PUT', '/api/devices/' + d.id, {meta: {isp: data}, ...(d.model || !data.provider ? {} : {})});
+    sel = d.id;
+  }, '', true);
+}
 // ------------------------------------------------------------ Gerätetypen & Icons
 let typeQ = '';
 const AREA_LABEL = {network: 'Netzwerk', servers: 'Server', storage: 'Speicher', apps: 'Dienste', smarthome: 'Smarthome', clients: 'Endgeräte', other: 'Sonstiges'};

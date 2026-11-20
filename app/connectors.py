@@ -1031,6 +1031,12 @@ HA_ICONS = {"hue": "philips-hue", "tplink": "tp-link", "smartthings": "smartthin
             "alexa_media": "amazon-alexa", "matter": "matter", "zha": "zigbee", "mqtt": "mqtt", "esphome": "esphome",
             "shelly": "shelly", "ring": "ring", "bambu_lab": "bambu-lab", "samsungtv": "samsung", "unifi": "unifi"}
 
+# Funkweg eines Geräts, das über eine Bridge angebunden ist (via_device), nach Integration
+HA_PROTO = {"hue": "zigbee", "zha": "zigbee", "deconz": "zigbee", "tradfri": "zigbee", "zwave_js": "zwave", "matter": "matter",
+            "thread": "thread", "homematicip_cloud": "homematic", "homematic": "homematic", "fritzbox": "dect", "bluetooth": "ble",
+            "bthome": "ble", "switchbot": "ble", "xiaomi_ble": "ble", "govee_ble": "ble", "enocean": "enocean", "knx": "knx",
+            "rfxtrx": "rf", "mqtt": "mqtt", "lutron_caseta": "rf", "velux": "rf", "somfy_mylink": "rf", "broadlink": "ir"}
+
 
 def ha_type(d):
     doms = set(d.get("doms") or [])
@@ -1093,6 +1099,7 @@ def sync_homeassistant(integ):
             own = None
         up = d["n"] == 0 or d["un"] < d["n"]
         ha_meta = {"ha": {"integration": d["integ"], "sw": d.get("sw"), "id": d["id"]}}
+        proto = HA_PROTO.get(d["integ"]) if d.get("via") else None
         if hit:                                   # vorhandenes (gescanntes) Gerät: nur anreichern
             dev = db.one("SELECT * FROM devices WHERE id=?", (hit[0],))
             auto = dev["name"] in (dev.get("ip"), (dev.get("hostname") or "").split(".")[0], dev.get("mac"))
@@ -1118,7 +1125,7 @@ def sync_homeassistant(integ):
         seen.add(ext)
         if own:
             patch = {"name": name, "status": "online" if up else "offline", "vendor": d.get("mf"), "model": d.get("model"),
-                     "meta": {**(own["meta"] or {}), **ha_meta}}
+                     "meta": {**(own["meta"] or {}), **ha_meta, **({"proto": proto} if proto and "proto" not in (own["meta"] or {}) else {})}}
             if up:
                 patch["last_seen"] = db.now()
             if not own.get("room") and d.get("area"):
@@ -1135,7 +1142,7 @@ def sync_homeassistant(integ):
                 "name": name, "type": ha_type(d) or "iot", "vendor": d.get("mf"), "model": d.get("model"), "mac": d["mac"],
                 "ip": ip, "vlan_id": vlan_for_ip(ip) if ip else None,
                 "room": d.get("area"), "status": "online" if up else "offline", "last_seen": db.now() if up else None,
-                "source": "homeassistant", "integration_id": integ["id"], "ext_id": ext, "meta": ha_meta})
+                "source": "homeassistant", "integration_id": integ["id"], "ext_id": ext, "meta": {**ha_meta, **({"proto": proto} if proto else {})}})
             new += 1
     # Platzierung (nur einmal, danach bleibt die Zuordnung Sache des Nutzers): an die Bridge, sonst in einen Bereich je Integration
     groups, bridges = {}, {x.get("via") for x in plan if x.get("via")}

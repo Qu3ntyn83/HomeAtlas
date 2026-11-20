@@ -88,6 +88,30 @@ als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links*
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
 | **System** | Intervalle, SNMP-Community, Export/Import. |
 
+## Internetzugang
+
+Ein Gerät vom Typ **Internet** steht für eine Leitung (bei zwei Anbietern zwei Geräte). Unter „Anschluss eintragen" stehen Anbieter,
+Zugangsart (Glasfaser, VDSL, Kabel, LTE/5G, Satellit, Richtfunk), Bandbreite, IPv4-Art (dynamisch, statisch, CGNAT, DS-Lite),
+IPv6-Präfix, DynDNS-Name, Modem/ONT, Kundennummer, Störungs-Hotline und Vertragsdaten. Die Karte zeigt Anbieter, öffentliche Adresse,
+Zugang und Bandbreite. Die Verbindungsart **Internetzugang (WAN)** wird orange gezeichnet (Funkzugänge gepunktet) und mit Zugang und
+Bandbreite beschriftet; „WAN-Verbindung anlegen" im Gerät verbindet die Leitung mit Firewall bzw. Router.
+
+Mit OPNsense-Anbindung kommen pro Leitung der Gateway-Zustand (online, Paketverlust, Latenz, Prüfziel), die WAN-Adresse (IPv4/IPv6)
+und ein Hinweis auf doppeltes NAT oder CGNAT dazu; der Status des Internet-Geräts folgt dem Gateway. Gibt es nur eine Leitung und ein
+Gateway, ordnet LabVis beides selbst zu.
+
+## Verbindungsarten
+
+Neben Kabel, WLAN, API und logisch kennt LabVis die gängigen Smarthome-Wege: **Zigbee, Z-Wave, Thread, Matter, Bluetooth/BLE,
+DECT ULE, Homematic IP, EnOcean, Funk 433/868 MHz, LoRa, Infrarot, MQTT, KNX, Feldbus** (RS-485, Modbus, 1-Wire) und **USB/seriell**
+(z. B. ein Funkstick am Home-Assistant-Host). Funk wird gepunktet, Busse gestrichelt, MQTT mit Pfeil zum Broker gezeichnet, jede Art
+in eigener Farbe und mit Namen an der Linie; die Legende zeigt die verwendeten Arten. Das Formular blendet nur die passenden Felder ein
+(Geschwindigkeit, VLAN und Trunk nur bei Kabel).
+
+Geräte, die als Chip unter einer Bridge hängen, tragen ihre **Vernetzung** (z. B. Zigbee über die Hue Bridge) als farbige Marke. Der
+Home-Assistant-Import setzt sie aus der Integration (Hue, ZHA, deCONZ → Zigbee, Z-Wave JS → Z-Wave, FRITZ!Box → DECT, Homematic IP …);
+im Gerät lässt sie sich ändern.
+
 ## Gerätetypen & Icons
 
 Unter **System → Typen & Icons verwalten** lässt sich jeder Gerätetyp anpassen: Bezeichnung, Icon, Bereich (wo er in Überwachung und

@@ -19,7 +19,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.22.0"
+VERSION = "0.24.0"
 
 
 def _build_id():
@@ -105,6 +105,7 @@ def state(request: Request):
         "wlans": db.q("SELECT * FROM wlans ORDER BY ssid COLLATE NOCASE"),
         "types": types.all_types(),
         "icons": types.list_icons(),
+        "gateways": [{k: g.get(k) for k in ("name", "address", "status", "delay", "loss")} for g in ipam.gateways()],
         "navlinks": db.q("SELECT * FROM navlinks ORDER BY sort, label COLLATE NOCASE"),
         "checks": monitor.light(),
         "discoveries": db.q("SELECT * FROM discoveries ORDER BY state='ignored', last_seen DESC"),
