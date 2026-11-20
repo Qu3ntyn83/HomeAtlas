@@ -118,13 +118,34 @@ def fetch(integ, cli):
         if _ip(r.get("ip")) and _mac(r.get("mac")) and not r.get("permanent") and not r.get("expired"):
             snap["arp"].append({"ip": _ip(r["ip"]), "mac": _mac(r["mac"]), "hostname": (r.get("hostname") or "").strip(),
                                 "intf": r.get("intf_description") or r.get("intf") or "", "vendor": (r.get("manufacturer") or "").strip() or vendor(r["mac"])})
+    # Internetzugang: Gateway-Zustand (dpinger) und WAN-Adressen
+    snap["gateways"], snap["wan"] = [], []
+    gws = part("Gateways", lambda: cli.call("/routes/gateway/status"))
+    for g in (gws or {}).get("items", []) if isinstance(gws, dict) else []:
+        if g.get("name"):
+            snap["gateways"].append({k: g.get(k) for k in ("name", "address", "status", "status_translated", "delay", "stddev", "loss", "monitor")})
+    info = part("Schnittstellen", lambda: cli.call("/interfaces/overview/interfaces_info"))
+    rows = info.get("rows", []) if isinstance(info, dict) else info or []
+    for r in rows:
+        a4 = (r.get("addr4") or "").split("/")[0]
+        try:
+            pub = bool(a4) and ipaddress.IPv4Address(a4).is_global
+        except ValueError:
+            pub = False
+        ident, descr = (r.get("identifier") or "").lower(), r.get("description") or ""
+        if ident.startswith("wan") or "wan" in descr.lower() or pub or (r.get("gateways") or []):
+            snap["wan"].append({"identifier": ident, "description": descr, "device": r.get("device") or "", "addr4": a4,
+                                "addr6": (r.get("addr6") or "").split("/")[0], "gateways": r.get("gateways") or []})
     db.x("INSERT OR REPLACE INTO opn_cache(integration_id, data, fetched) VALUES(?,?,?)", (integ["id"], json.dumps(snap), db.now()))
     learned = apply_arp()
+    isp = apply_isp()
     a = [x for x in (f"{sum(1 for d in snap['dns'] if d['rr'] in ('A', 'AAAA'))} DNS-Einträge" if snap["dns"] else "",
                      f"{len(snap['reservations'])} Reservierungen" if snap["reservations"] else "",
                      f"{len(snap['leases'])} Leases" if snap["leases"] else "", f"ARP {len(snap['arp'])}" if snap["arp"] else "") if x]
     if learned:
         a.append(learned)
+    if isp:
+        a.append(isp)
     if snap["errors"]:
         a.append("⚠ " + "; ".join(sorted(set(snap["errors"].values())))[:160])
     return " · ".join(a)
@@ -150,6 +171,60 @@ def vendor(mac):
         except OSError:
             pass
     return _OUI.get(mac.replace(":", "")[:6].upper(), "")
+
+
+def gateways():
+    """Gateways aller OPNsense-Anbindungen mit Zustand und passender WAN-Schnittstelle."""
+    out = []
+    for row in db.q("SELECT data, fetched FROM opn_cache ORDER BY fetched"):
+        snap = json.loads(row["data"])
+        wans = snap.get("wan") or []
+        for g in snap.get("gateways") or []:
+            key = g["name"].split("_")[0].lower()           # WAN_DHCP → wan, WAN2_PPPOE → wan2
+            w = next((x for x in wans if g["name"] in (x.get("gateways") or [])), None) or \
+                next((x for x in wans if key in (x["identifier"], x["description"].lower())), None) or (wans[0] if len(wans) == 1 else None)
+            out.append({**g, "wan": w, "at": row["fetched"]})
+    return out
+
+
+def _num(v):
+    m = re.search(r"[\d.]+", str(v or ""))
+    return float(m.group(0)) if m else None
+
+
+def apply_isp():
+    """Zustand der Gateways an die Internet-Geräte schreiben (Status, Latenz, Verlust, WAN-Adresse)."""
+    from . import types
+    gws = {g["name"]: g for g in gateways()}
+    if not gws:
+        return ""
+    nets = [d for d in db.q("SELECT id, type, status, meta FROM devices") if types.base(d["type"]) == "internet"]
+    if len(nets) == 1 and len(gws) == 1 and not ((nets[0]["meta"] or {}).get("isp") or {}).get("gateway"):
+        m = nets[0]["meta"] or {}
+        m["isp"] = {**(m.get("isp") or {}), "gateway": next(iter(gws))}   # eindeutig: eine Leitung, ein Gateway
+        nets[0]["meta"] = m
+    n = 0
+    for d in nets:
+        meta = d["meta"] or {}
+        g = gws.get((meta.get("isp") or {}).get("gateway") or "")
+        if not g:
+            continue
+        st = (g.get("status") or "").lower()
+        w = g.get("wan") or {}
+        ip4 = w.get("addr4") or ""
+        try:
+            a = ipaddress.IPv4Address(ip4) if ip4 else None
+        except ValueError:
+            a = None
+        meta["isp_live"] = {"status": st or "unknown", "text": g.get("status_translated") or "", "delay": _num(g.get("delay")), "loss": _num(g.get("loss")),
+                            "address": g.get("address") or "", "monitor": g.get("monitor") or "", "wan_ip": ip4, "wan_ip6": w.get("addr6") or "",
+                            "wan_if": w.get("description") or w.get("identifier") or "",
+                            "nat": bool(a and a.is_private and a not in ipaddress.IPv4Network("100.64.0.0/10")),
+                            "cgnat": bool(a and a in ipaddress.IPv4Network("100.64.0.0/10")), "at": g.get("at")}
+        status = "offline" if st in ("down", "force_down") else "online" if st in ("none", "loss", "delay", "delay+loss", "") else d["status"]
+        db.update("devices", d["id"], {"meta": meta, "status": status, **({"last_seen": db.now()} if status == "online" else {})})
+        n += 1
+    return f"Internet: {n} Leitung{'en' if n != 1 else ''}" if n else ""
 
 
 def arp_table():

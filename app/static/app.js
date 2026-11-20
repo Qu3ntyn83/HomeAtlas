@@ -36,7 +36,18 @@ const LK = {
   bus: {label: 'Feldbus (RS-485, Modbus, 1-Wire)', style: 'bus', short: 'Bus', col: '#a8b3bf', home: 1},
   usb: {label: 'USB / seriell (z. B. Funkstick)', style: 'bus', short: 'USB', col: '#c9d1d9', home: 1},
 };
-const KINDS = Object.entries(LK).map(([k, v]) => [k, v.label]);
+LK.wan = {label: 'Internetzugang (WAN)', style: 'wan', short: 'WAN', col: '#ffa657'};
+const KINDS = ['cable', 'wan', ...Object.keys(LK).filter(k => k !== 'cable' && k !== 'wan')].map(k => [k, LK[k].label]);
+// Internetzugang (ISP) eines Internet-Geräts
+const ACCESS = {fiber: ['Glasfaser (FTTH)', 'Glasfaser'], vdsl: ['VDSL / Supervectoring', 'VDSL'], adsl: ['ADSL', 'ADSL'], cable: ['Kabel (DOCSIS)', 'Kabel'],
+  lte: ['LTE', 'LTE'], '5g': ['5G', '5G'], sat: ['Satellit (z. B. Starlink)', 'Satellit'], wisp: ['Richtfunk', 'Richtfunk'], other: ['sonstiger', '']};
+const IP4MODE = {dynamic: 'dynamisch', static: 'statisch', cgnat: 'CGNAT (geteilte IPv4)', dslite: 'DS-Lite (IPv4 über IPv6)', none: 'keine IPv4'};
+const isNet = d => d && bt(d.type) === 'internet';
+const ispOf = d => (d && d.meta && d.meta.isp) || {};
+const liveOf = d => (d && d.meta && d.meta.isp_live) || null;
+const bwTxt = i => i.down || i.up ? `${i.down || '?'}/${i.up || '?'} Mbit/s` : '';
+const mbit = n => n >= 1000 && n % 1000 === 0 ? n / 1000 + ' Gbit/s' : n + ' Mbit/s';
+const liveTxt = L => !L ? '' : L.status === 'down' || L.status === 'force_down' ? 'offline' : [L.delay != null ? Math.round(L.delay) + ' ms' : '', L.loss ? L.loss + ' % Verlust' : ''].filter(Boolean).join(' · ') || 'online';
 const lkOf = l => LK[l.kind] || LK.cable;
 // Farbe einer Verbindung: Kabel nach VLAN, WLAN nach SSID-Netz, sonst feste Farbe der Art
 const lkCol = (l, vlanCol) => l.kind === 'wlan' ? wcol(l) : l.kind === 'logical' ? PAL.MUTED : (LK[l.kind] && LK[l.kind].col) || vlanCol;
@@ -254,11 +265,22 @@ function buildCard(d) {
   const tabW = Math.round(tw(d.name, 19, 700) + tw('\u00a0·\u00a0' + type, 13, 500) + 44);
   const extra = addrsOf(d).length;
   const grp = d.type === 'group', on = kids.filter(k => k.status === 'online').length;
-  const addr = grp ? '' : [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
-  const l1 = grp ? (d.note || `${kids.length} ${kids.length === 1 ? 'Gerät' : 'Geräte'}`) : d.model || d.note || '';
-  const l3 = grp ? (kids.length ? `${d.note ? kids.length + ' Geräte · ' : ''}${on} online` : 'noch leer – Geräte auswählen und „Gruppieren“') : d.os || (d.model ? d.note : '') || '';
+  let addr = grp ? '' : [d.ip, extra ? `+${extra} ${extra > 1 ? 'Adressen' : 'Adresse'}` : '', d.hostname].filter(Boolean).join(' · ');
+  let l1 = grp ? (d.note || `${kids.length} ${kids.length === 1 ? 'Gerät' : 'Geräte'}`) : d.model || d.note || '';
+  let l3 = grp ? (kids.length ? `${d.note ? kids.length + ' Geräte · ' : ''}${on} online` : 'noch leer – Geräte auswählen und „Gruppieren“') : d.os || (d.model ? d.note : '') || '';
+  const isp = isNet(d) ? ispOf(d) : null, L = isNet(d) ? liveOf(d) : null, ispPills = [];
+  if (isp) {
+    const pub = (L && L.wan_ip && !L.nat) ? L.wan_ip : isp.ip || '';
+    l1 = isp.provider || l1 || 'Internet';
+    addr = [pub, isp.ip4 && isp.ip4 !== 'dynamic' ? IP4MODE[isp.ip4].split(' (')[0] : L && L.cgnat ? 'CGNAT' : L && L.nat ? 'hinter NAT' : ''].filter(Boolean).join(' · ') || d.ip || '';
+    l3 = [isp.access && ACCESS[isp.access] ? ACCESS[isp.access][1] : '', bwTxt(isp)].filter(Boolean).join(' · ') || l3;
+    if (L) ispPills.push({t: [isp.gateway, liveTxt(L)].filter(Boolean).join(' · '), c: L.status === 'down' || L.status === 'force_down' ? '#f85149' : L.status === 'none' ? '#3fb950' : '#d29922', dot: 1});
+    if (isp.dyndns) ispPills.push({t: isp.dyndns, c: PAL.MUTED});
+    if (isp.ip6) ispPills.push({t: 'IPv6 ' + isp.ip6, c: PAL.MUTED});
+  }
   const headW = Math.max(70 + Math.max(tw(l1, 14, 500), tw(addr, 12.5, 400, true), tw(l3, 12)) + 40,
-    ssidsOf(d.id).reduce((a, w) => a + tw(w.ssid, 11.5, 500, true) + 40, 0) + 2 * PAD);
+    ssidsOf(d.id).reduce((a, w) => a + tw(w.ssid, 11.5, 500, true) + 40, 0) + 2 * PAD,
+    ispPills.reduce((a, p) => a + tw(p.t, 11.5, 500, true) + (p.dot ? 34 : 22), 0) + 2 * PAD);
   // Blöcke: Gruppen (falls vorhanden) bleiben zusammen, sonst jeder Chip einzeln
   const blocks = [];
   const grouped = kids.some(k => k.meta && k.meta.group);
@@ -286,6 +308,16 @@ function buildCard(d) {
   s += T(70, TAB + 29, l1, {size: 14, weight: 500}) + T(70, TAB + 47, addr, {size: 12.5, mono: true, fill: d.vlan_id ? col : PAL.MUTED}) +
     T(70, TAB + 63, l3, {size: 12, fill: PAL.MUTED});
   let y = TAB + 80;
+  if (ispPills.length) {
+    let px = PAD;
+    for (const p of ispPills) {
+      const pw = tw(p.t, 11.5, 500, true) + (p.dot ? 32 : 20);
+      s += `<rect x="${px}" y="${y - 2}" width="${pw.toFixed(1)}" height="22" rx="11" fill="${PAL.CHIP}" stroke="${p.c}" stroke-width="1.2"/>` +
+        (p.dot ? `<circle cx="${px + 13}" cy="${y + 9}" r="3.6" fill="${p.c}"/>` : '') + T(px + (p.dot ? 23 : 10), y + 13, p.t, {size: 11.5, weight: 500, mono: true, fill: p.dot ? PAL.TEXT : p.c});
+      px += pw + 6;
+    }
+    y += 30;
+  }
   const ssids = ssidsOf(d.id);
   if (ssids.length) {
     let px = PAD;
@@ -323,7 +355,7 @@ function buildCard(d) {
     for (const c of b.chips) { s += chipSvg(c, bx, colY[ci], cw, d.vlan_id); colY[ci] += chipH(c) + 8; }
     if (b.title) colY[ci] += 6;
   }
-  const minH = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
+  const minH = Math.ceil(has ? Math.max(...colY, y) + PAD - 8 : (ssids.length || ispPills.length || memoOn(d) ? y + PAD - 12 : TAB + 78));
   const h = canResize(d) && own.h > 0 ? Math.max(minH, Math.round(own.h)) : minH;
   s = folder(w, h, tabW, stroke, grp) + s;
   if (canResize(d)) s += `<g class="rz" data-rz="${d.id}"><title>Größe ziehen · Doppelklick: automatische Größe</title><rect x="${w - 30}" y="${h - 30}" width="30" height="30" fill="transparent"/>` +
@@ -378,7 +410,11 @@ function linksSvg() {
     const off = vfilter && !l.trunk && l.vlan_id !== vfilter ? ' off' : '';
     let p;
     const k = lkOf(l), kc = lkCol(l, col);
-    if (k.style === 'arrow') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-${l.kind === 'api' ? 'api' : esc(l.kind)})"/>`;
+    const netEnd = isNet(A.d) ? A.d : isNet(B.d) ? B.d : null, wi = netEnd ? ispOf(netEnd) : {};
+    if (k.style === 'wan') p = ['lte', '5g', 'sat', 'wisp'].includes(wi.access)
+      ? `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="4" stroke-dasharray="0.1 9" stroke-linecap="round" stroke-linejoin="round"/>`
+      : `<path d="${d}" fill="none" stroke="${kc}" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><path class="core" d="${d}" fill="none" stroke="${PAL.BG}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+    else if (k.style === 'arrow') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="1.8" stroke-dasharray="7 5" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arr-${l.kind === 'api' ? 'api' : esc(l.kind)})"/>`;
     else if (k.style === 'radio') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="${l.kind === 'wlan' ? 3.2 : 2.8}" stroke-dasharray="0.1 ${l.kind === 'wlan' ? 8 : 6}" stroke-linecap="round" stroke-linejoin="round"/>`;
     else if (k.style === 'bus') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="2.2" stroke-dasharray="11 3 2 3" stroke-linejoin="round"/>`;
     else if (k.style === 'logical') p = `<path class="core" d="${d}" fill="none" stroke="${kc}" stroke-width="1.6" stroke-dasharray="${l.kind === 'logical' ? '2 6' : '9 4 2 4'}" stroke-linecap="round"/>`;
@@ -396,7 +432,8 @@ function linksSvg() {
     const sb = {b: 't', t: 'b', r: 'l', l: 'r'}[sa];
     const lcol = l.kind === 'cable' || !LK[l.kind] ? (l.trunk ? PAL.TRUNK : col) : kc;
     const btag = l.kind === 'wlan' ? ['WLAN', (wlan(l.wlan_id) || {}).ssid, l.note].filter(Boolean).join(' · ') : l.kind === 'logical' ? (l.note || '')
-      : l.kind === 'cable' || !LK[l.kind] ? [l.speed, l.b_port].filter(Boolean).join(' · ') : [k.short, l.note, l.b_port].filter(Boolean).join(' · ');
+      : l.kind === 'cable' || !LK[l.kind] ? [l.speed, l.b_port].filter(Boolean).join(' · ')
+      : l.kind === 'wan' ? [wi.access && ACCESS[wi.access] ? ACCESS[wi.access][1] : 'WAN', bwTxt(wi), l.note].filter(Boolean).join(' · ') : [k.short, l.note, l.b_port].filter(Boolean).join(' · ');
     out += `<g class="link${off}" data-link="${l.id}" data-a="${A.id}" data-b="${B.id}">${p}<path class="hit" d="${d}"/>` +
       tagAt(pb, sb, btag, lcol, pbi) + tagAt(pa, sa, l.a_port || '', lcol, pai) + '</g>';
   }
@@ -509,7 +546,7 @@ function renderTopo() {
     `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
     `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span>` +
-    [...new Set([...S.links.map(l => l.kind), ...S.devices.map(d => (d.meta || {}).proto)])].filter(k => LK[k] && LK[k].home).map(k => `<i class="lk ${LK[k].style}" style="--c:${LK[k].col}"></i><span>${esc(LK[k].short)}</span>`).join('') + '</div>' +
+    [...new Set([...S.links.map(l => l.kind), ...S.devices.map(d => (d.meta || {}).proto)])].filter(k => LK[k] && (LK[k].home || k === 'wan')).map(k => `<i class="lk ${LK[k].style}" style="--c:${LK[k].col}"></i><span>${esc(LK[k].short)}</span>`).join('') + '</div>' +
     `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
     `<div id="tools"><span class="seg"><button class="btn${viewMode === 'normal' ? ' on' : ''}" data-act="viewMode" data-m="normal">Normal</button><button class="btn${viewMode === 'rooms' ? ' on' : ''}" data-act="viewMode" data-m="rooms">Räume</button></span><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
@@ -662,7 +699,7 @@ function showDevice(id, keep) {
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
     fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
-    fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>';
+    fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>' + (isNet(d) ? ispSection(d) : '');
   h += `<h3>Notizen</h3>` + ((d.memo || '').trim() ? `<div class="memo">${esc(d.memo.trim())}</div>` : '<span class="muted" style="font-size:13px">keine</span>') +
     `<div class="acts"><button class="btn sm" data-act="editMemo" data-id="${id}">${(d.memo || '').trim() ? 'Bearbeiten' : 'Notiz schreiben'}</button>` +
     ((d.memo || '').trim() ? `<button class="btn sm" data-act="memoToggle" data-id="${id}" aria-pressed="${d.memo_show ? 'true' : 'false'}">${d.memo_show ? 'Auf der Karte ausblenden' : 'Auf der Karte einblenden'}</button>` : '') + '</div>';
@@ -827,7 +864,7 @@ function linkForm(l) {
   }, isNew ? '' : `<button class="btn bad" type="button" data-act="delLink" data-id="${l.id}">Löschen</button>`, true);
   const f = $('form', panel), lab = n => { const x = $(`[name=${n}]`, f); return x && x.closest('label'); };
   const NOTE = {api: 'Protokoll, z. B. REST :8006, SNMP', mqtt: 'Topic oder Broker, z. B. zigbee2mqtt/#', zigbee: 'z. B. Kanal 15, Router/Endgerät', zwave: 'z. B. Node-ID',
-    thread: 'z. B. Border Router, Netzwerkname', matter: 'z. B. Fabric, über Thread/WLAN', ble: 'z. B. Proxy, Reichweite', ir: 'z. B. Fernbedienungscode', usb: 'z. B. /dev/ttyUSB0', bus: 'z. B. Adresse, Baudrate'};
+    thread: 'z. B. Border Router, Netzwerkname', wan: 'z. B. Modem/ONT, Leitungs-ID, PPPoE', matter: 'z. B. Fabric, über Thread/WLAN', ble: 'z. B. Proxy, Reichweite', ir: 'z. B. Fernbedienungscode', usb: 'z. B. /dev/ttyUSB0', bus: 'z. B. Adresse, Baudrate'};
   const sync = () => {
     const kind = $('[name=kind]', f).value, k = LK[kind] || LK.cable, wire = k.style === 'line';
     for (const n of ['speed', 'trunk']) { const x = lab(n); if (x) x.hidden = !wire; }
@@ -1320,6 +1357,11 @@ const ACT = {
     deviceForm({type: 'other', ip: d.ip, mac, name: ipamDevName(d.ip, c), hostname: ipamDevName(d.ip, c), vlan_id: s ? s.vlan_id : '', rack_height: 1});
   },
   ipamShow: d => { const b = $('#side [data-view=ipam]'); b.click(); ipamTab = 'addr'; ipamCellIp = d.ip; const go = () => { if (IPAM) ACT.ipamCellOpen({ip: d.ip}); else setTimeout(go, 200); }; go(); },
+  ispEdit: d => ispForm(dev(+d.id)),
+  ispLink: d => {
+    const net = dev(+d.id), cand = S.devices.filter(x => ['firewall', 'router'].includes(bt(x.type))).sort((a, b) => (bt(a.type) === 'router') - (bt(b.type) === 'router'));
+    linkForm({kind: 'wan', a_id: cand.length ? cand[0].id : '', b_id: net.id});
+  },
   typeEdit: d => typeForm(S.types.find(t => t.key === d.k)),
   typeNew: () => typeForm({}),
   typeDel: d => {
@@ -1536,6 +1578,42 @@ const ACT = {
   },
 };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') navDrawer(false); });
+// ------------------------------------------------------------ Internetzugang (ISP)
+function ispSection(d) {
+  const i = ispOf(d), L = liveOf(d), f = (k, v) => v ? `<dt>${k}</dt><dd>${v}</dd>` : '';
+  const pub = L && L.wan_ip ? `<span class="mono">${esc(L.wan_ip)}</span>${L.nat ? ' <span class="muted">(privat – Router/Modem davor macht NAT)</span>' : L.cgnat ? ' <span class="muted">(CGNAT-Bereich)</span>' : ''}` : i.ip ? `<span class="mono">${esc(i.ip)}</span>` : '';
+  const st = L ? `<span class="dot ${L.status === 'down' || L.status === 'force_down' ? 'offline' : 'online'}"></span> ${esc(L.text || L.status)} · ${esc(liveTxt(L))}` +
+    `<span class="muted"> · ${esc(i.gateway || '')}${L.monitor ? ', prüft ' + esc(L.monitor) : ''} · ${ago(L.at)}</span>` : '';
+  const empty = !i.provider && !i.access && !L;
+  let h = `<h3>Internetzugang</h3>`;
+  if (empty) h += `<p class="muted" style="font-size:12.5px;margin:0 0 8px">Anbieter, Zugangsart, Bandbreite und öffentliche Adresse eintragen. Mit OPNsense-Anbindung kommen Zustand, Latenz und WAN-Adresse von selbst.</p>`;
+  else h += `<dl class="facts">${f('Anbieter', esc(i.provider || ''))}${f('Zugang', i.access && ACCESS[i.access] ? esc(ACCESS[i.access][0]) : '')}` +
+    f('Bandbreite', i.down || i.up ? `↓ ${mbit(+i.down || 0)} · ↑ ${mbit(+i.up || 0)}` : '') + f('Zustand', st) + f('Öffentl. IPv4', pub) +
+    f('IPv4', i.ip4 ? esc(IP4MODE[i.ip4] || i.ip4) : '') + f('IPv6', [i.ip6 ? esc(i.ip6) : '', L && L.wan_ip6 ? `<span class="mono">${esc(L.wan_ip6)}</span>` : ''].filter(Boolean).join(' · ')) +
+    f('DynDNS', i.dyndns ? `<span class="mono">${esc(i.dyndns)}</span>` : '') + f('Modem / ONT', esc(i.modem || '')) +
+    f('Kundennr.', i.customer ? `<span class="mono">${esc(i.customer)}</span>` : '') + f('Hotline', i.hotline ? `<a href="tel:${esc(i.hotline.replace(/[^\d+]/g, ''))}">${esc(i.hotline)}</a>` : '') +
+    f('Vertrag', esc([i.contract_end ? 'Laufzeit bis ' + i.contract_end : '', i.cost ? i.cost + ' € / Monat' : ''].filter(Boolean).join(' · '))) + '</dl>';
+  if (!ro()) h += `<div class="acts"><button class="btn sm" data-act="ispEdit" data-id="${d.id}">${empty ? 'Anschluss eintragen' : 'Anschluss bearbeiten'}</button>` +
+    (S.links.some(l => l.kind === 'wan' && (l.a_id === d.id || l.b_id === d.id)) ? '' : `<button class="btn sm" data-act="ispLink" data-id="${d.id}">WAN-Verbindung anlegen</button>`) + '</div>';
+  return h;
+}
+function ispForm(d) {
+  const i = ispOf(d), gws = S.gateways || [];
+  openForm('Internetzugang · ' + esc(d.name), [
+    [['provider', 'Anbieter', 'text', 'z. B. Telekom, Vodafone, Deutsche Glasfaser'], ['access', 'Zugang', 'select', [['', '–'], ...Object.entries(ACCESS).map(([k, v]) => [k, v[0]])]]],
+    [['down', 'Download (Mbit/s)', 'number'], ['up', 'Upload (Mbit/s)', 'number']],
+    [['ip4', 'IPv4', 'select', [['', '–'], ...Object.entries(IP4MODE)]], ['ip', 'Öffentliche IPv4 (bei statisch)', 'text', 'z. B. 203.0.113.10']],
+    [['ip6', 'IPv6-Präfix', 'text', 'z. B. /56 delegiert'], ['dyndns', 'DynDNS-Name', 'text', 'z. B. home.example.de']],
+    ['gateway', 'OPNsense-Gateway (Zustand, Latenz, WAN-Adresse)', 'select', [['', gws.length ? '– keins –' : '– keine OPNsense-Anbindung –'], ...gws.map(g => [g.name, `${g.name}${g.address ? ' · ' + g.address : ''}`])]],
+    ['modem', 'Modem / ONT', 'text', 'z. B. FRITZ!Box 5590 Fiber im Bridge-Modus'],
+    [['customer', 'Kundennummer'], ['hotline', 'Hotline / Störung', 'text', 'z. B. 0800 330 1000']],
+    [['contract_end', 'Mindestlaufzeit bis', 'text', 'z. B. 03/2027'], ['cost', 'Kosten € / Monat', 'text']],
+  ], i, async data => {
+    for (const k of ['down', 'up']) data[k] = data[k] ? +data[k] : null;
+    await api('PUT', '/api/devices/' + d.id, {meta: {isp: data}, ...(d.model || !data.provider ? {} : {})});
+    sel = d.id;
+  }, '', true);
+}
 // ------------------------------------------------------------ Gerätetypen & Icons
 let typeQ = '';
 const AREA_LABEL = {network: 'Netzwerk', servers: 'Server', storage: 'Speicher', apps: 'Dienste', smarthome: 'Smarthome', clients: 'Endgeräte', other: 'Sonstiges'};
