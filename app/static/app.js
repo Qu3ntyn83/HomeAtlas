@@ -3,7 +3,7 @@
 const PAL = {BG: '#0b0f15', PANEL: '#111821', CHIP: '#19222e', BORDER: '#253042', TEXT: '#e6edf3', MUTED: '#8d9aab',
   FAINT: '#5d6a7c', TRUNK: '#d5dde6', TRUNKB: '#3a475a', LINK: '#79c0ff', OK: '#3fb950', BAD: '#f85149'};
 const SPEED_W = {'100M': 1.4, '1G': 2.4, '2.5G': 3.8, '5G': 5.5, '10G': 8, '25G': 10, '40G': 12};
-const TYPES = {internet: 'Internet', router: 'Router', firewall: 'Firewall', switch: 'Switch', ap: 'Access Point',
+let TYPES = {internet: 'Internet', router: 'Router', firewall: 'Firewall', switch: 'Switch', ap: 'Access Point',
   hypervisor: 'Hypervisor', server: 'Server', nas: 'NAS', workstation: 'Workstation', client: 'Client', iot: 'IoT',
   printer: 'Drucker', vm: 'VM', container: 'Container', app: 'App', service: 'Dienst', other: 'Gerät',
   light: 'Lampe', plug: 'Steckdose', sensor: 'Sensor', thermostat: 'Thermostat', blind: 'Rollladen', lock: 'Türschloss', vacuum: 'Saugroboter',
@@ -50,7 +50,14 @@ const dev = id => S.devices.find(d => d.id === id);
 const kidsOf = id => S.devices.filter(d => d.parent_id === id);
 const vlan = id => S.vlans.find(v => v.id === id);
 const vcol = id => (vlan(id) || {}).color || PAL.TRUNKB;
-const icon = d => '/api/icon/' + encodeURIComponent(d.icon || 'type-' + (d.type || 'other'));
+let TYPEDEF = {};
+// Icon eines Typs: eigenes Icon aus der Typ-Verwaltung, sonst das eingebaute Symbol (bei eigenen Typen das der Vorlage)
+const typeIcon = t => { const x = TYPEDEF[t]; return (x && x.icon) || 'type-' + (x && x.custom ? x.base : (t || 'other')); };
+const bt = t => (TYPEDEF[t] || {}).base || t;
+const typeOpts = cur => (S && S.types ? S.types.filter(t => !t.hidden || t.key === cur).sort((a, b) => a.label.localeCompare(b.label, 'de')).map(t => [t.key, t.label]) : Object.entries(TYPES));
+// eigene Icons tragen ihre Dateigröße/Zeit als Version, damit ein ersetztes Icon sofort überall erscheint
+const iconUrl = n => '/api/icon/' + encodeURIComponent(n) + (n && n.startsWith('up-') ? '?v=' + (((S && S.icons) || []).find(i => i.name === n) || {}).v : '');
+const icon = d => iconUrl(d.icon || typeIcon(d.type || 'other'));
 const addrsOf = d => (d.meta && d.meta.addrs) || [];
 const inVlan = (d, vid) => d.vlan_id === vid || addrsOf(d).some(a => a.vlan_id === vid);
 const wlan = id => S.wlans.find(w => w.id === id);
@@ -89,6 +96,7 @@ async function load(silent) {
   try {
     S = await api('GET', '/api/state');
   } catch (e) { if (!silent) toast(e.message, true); return; }
+  if (S.types) { TYPEDEF = Object.fromEntries(S.types.map(t => [t.key, t])); TYPES = Object.fromEntries(S.types.map(t => [t.key, t.label])); }
   if (load.build && S.build !== load.build && panelMode !== 'form') { location.reload(); return; }
   load.build = S.build;
   $('#title').textContent = S.settings.title || 'LabVis';
@@ -108,7 +116,7 @@ async function load(silent) {
 }
 function render() {
   main.className = view === 'topo' ? 'canvas' : '';
-  ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, ipam: renderIpam, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
+  ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, ipam: renderIpam, types: renderTypes, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
 }
 // Seitenmenü: am Desktop ein-/ausklappbar (gemerkt), am Handy als Schublade
 const navStore = v => { try { if (v === undefined) return localStorage.getItem('labvis.nav'); localStorage.setItem('labvis.nav', v); } catch (e) { /* ohne Speicher gilt die Wahl bis zum Neuladen */ } return null; };
@@ -146,7 +154,7 @@ function T(x, y, s, o = {}) {
   return `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" font-size="${o.size || 13}" fill="${o.fill || PAL.TEXT}" ` +
     `font-weight="${o.weight || 400}" text-anchor="${o.anchor || 'start'}"${o.mono ? ' class="m"' : ''}>${esc(s)}</text>`;
 }
-const IMG = (name, x, y, s) => `<image href="/api/icon/${encodeURIComponent(name)}" x="${x}" y="${y}" width="${s}" height="${s}"/>`;
+const IMG = (name, x, y, s) => `<image href="${iconUrl(name)}" x="${x}" y="${y}" width="${s}" height="${s}"/>`;
 // Problem = war schon einmal erreichbar und fällt jetzt aus; „nie erreichbar“ ist ein falsches Ziel, kein Ausfall
 const isProblem = c => c.enabled && c.status === 'down' && !!c.ever_up;
 const isNever = c => c.enabled && c.status === 'down' && !c.ever_up;
@@ -182,7 +190,7 @@ function chipSvg(c, x, y, w, parentVlan) {
   const tagW = tag ? tw(tag, 10.5, 400, true) + 8 : 0;
   let s = `<g class="chip${off}" data-id="${c.id}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})">` +
     `<rect class="cb" width="${w.toFixed(1)}" height="${h}" rx="8" fill="${PAL.CHIP}" stroke="${stroke}" stroke-width="1.2"/>` +
-    IMG(c.icon || 'type-' + c.type, 10, 11, 22) +
+    IMG(c.icon || typeIcon(c.type), 10, 11, 22) +
     T(40, 21, fit(c.name, w - 62 - tagW, 13.5, 600), {size: 13.5, weight: 600}) +
     (tag ? T(w - 22, 20, tag, {size: 10.5, fill: PAL.FAINT, mono: true, anchor: 'end'}) : '') +
     statusDot(c, w - 11, 16, 3.6) +
@@ -197,7 +205,7 @@ function chipSvg(c, x, y, w, parentVlan) {
     const gy = my + (memoOn(c) ? 15 : 0) + i * 19;
     const right = g.hostname || g.note || '';
     const nameW = Math.min(tw(g.name, 12, 500), w * 0.5);
-    s += IMG(g.icon || 'type-' + g.type, 13, gy, 14) + T(34, gy + 11, fit(g.name, w * 0.5, 12, 500), {size: 12, weight: 500}) +
+    s += IMG(g.icon || typeIcon(g.type), 13, gy, 14) + T(34, gy + 11, fit(g.name, w * 0.5, 12, 500), {size: 12, weight: 500}) +
       T(w - 10, gy + 11, fit(right, w - 54 - nameW, 10.5, 400, true), {size: 10.5, mono: true, anchor: 'end',
         fill: g.url ? PAL.LINK : PAL.MUTED});
   });
@@ -247,7 +255,7 @@ function buildCard(d) {
   }
   cw = (w - 2 * PAD - (cols - 1) * GAP) / cols;
   let s = T(16, 21, d.name, {size: 19, weight: 700}) + T(16 + tw(d.name, 19, 700), 21, '\u00a0·\u00a0' + type, {size: 13, weight: 500, fill: PAL.MUTED});
-  s += IMG(d.icon || 'type-' + d.type, 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20));
+  s += IMG(d.icon || typeIcon(d.type), 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20));
   s += T(70, TAB + 29, l1, {size: 14, weight: 500}) + T(70, TAB + 47, addr, {size: 12.5, mono: true, fill: d.vlan_id ? col : PAL.MUTED}) +
     T(70, TAB + 63, l3, {size: 12, fill: PAL.MUTED});
   let y = TAB + 80;
@@ -646,7 +654,7 @@ function showDevice(id, keep) {
   if (ssidsOf(id).length) h += `<h3>WLANs (${ssidsOf(id).length})</h3>` + ssidsOf(id).map(w => { const wv = vlan(w.vlan_id);
     return `<div class="rowl"><b class="mono">${esc(w.ssid)}</b>${wv ? `<span style="color:${esc(wv.color)};font-size:12px">${esc(wv.vid != null ? vtag(wv) + ' · ' + wv.name : wv.name)}</span>` : ''}` +
       `<span class="muted" style="margin-left:auto;font-size:12px">${esc([w.band, w.security].filter(Boolean).join(' · '))}</span><button class="btn sm" data-act="editWlan" data-id="${w.id}">✎</button></div>`; }).join('');
-  if ((m.hw || []).length + (m.hw_bmc || []).length) h += '<h3>Hardware</h3>' + [...(m.hw || []), ...(m.hw_bmc || [])].map(t => `<div class="tile"><img src="/api/icon/${esc(t.icon || 'glyph-cpu')}" alt=""><div>` +
+  if ((m.hw || []).length + (m.hw_bmc || []).length) h += '<h3>Hardware</h3>' + [...(m.hw || []), ...(m.hw_bmc || [])].map(t => `<div class="tile"><img src="${iconUrl(t.icon || 'glyph-cpu')}" alt=""><div>` +
     `<span class="lab">${esc(t.label)}</span><br><b>${esc(t.value)}</b><small>${esc(t.sub)}</small></div></div>`).join('');
   if ((m.pools || []).length) h += '<h3>Storage</h3>' + m.pools.map(p => `<div class="box" style="margin-bottom:6px"><b>${esc(p.name)}</b> <span class="muted">${esc(p.layout)}</span>` +
     `<div class="bar2"><i style="width:${+p.pct || 0}%"></i></div><small class="muted">${esc(p.used)}</small></div>`).join('');
@@ -712,12 +720,23 @@ function iconHelp(inp) {
   box.className = 'iconhelp';
   box.innerHTML = `<div class="ihrow"><img alt="" width="30" height="30"><span>Name aus der <a href="https://dashboardicons.com" target="_blank" rel="noopener">Icon-Übersicht (dashboardicons.com) ↗</a> eintragen (klein, mit Bindestrichen), ` +
     `z. B. <span class="mono">proxmox</span>, <span class="mono">home-assistant</span>, <span class="mono">synology</span>. Leer = Symbol nach Gerätetyp.</span></div>` +
+    ((S.icons || []).length ? `<details open><summary>Eigene Icons</summary><div class="ihgrid">${S.icons.map(i => `<button type="button" data-icon="${esc(i.name)}" title="${esc(i.name)}" aria-label="${esc(i.label)}"><img src="${iconUrl(i.name)}" alt="" width="22" height="22"></button>`).join('')}</div></details>` : '') +
+    `<div class="ihup"><button type="button" class="btn sm" data-up>Eigenes Icon hochladen</button><input type="file" accept=".svg,.png,.webp,.jpg,.jpeg,image/svg+xml,image/png,image/webp,image/jpeg" hidden></div>` +
     `<details><summary>Eingebaute Symbole</summary><div class="ihgrid">${BUILTIN_ICONS.map(n => `<button type="button" data-icon="${n}" title="${n}" aria-label="${n}"><img src="/api/icon/${n}" alt="" width="22" height="22"></button>`).join('')}</div></details>`;
   inp.closest('label').after(box);
   const img = $('img', box);
-  const prev = () => { const v = inp.value.trim().toLowerCase(); img.style.visibility = v ? 'visible' : 'hidden'; if (v) img.src = '/api/icon/' + encodeURIComponent(v); };
+  const prev = () => { const v = inp.value.trim().toLowerCase(); img.style.visibility = v ? 'visible' : 'hidden'; if (v) img.src = iconUrl(v); };
   let t; inp.addEventListener('input', () => { clearTimeout(t); t = setTimeout(prev, 400); });
-  box.addEventListener('click', e => { const b = e.target.closest('[data-icon]'); if (b) { inp.value = b.dataset.icon; prev(); } });
+  box.addEventListener('click', e => {
+    const b = e.target.closest('[data-icon]'); if (b) { inp.value = b.dataset.icon; prev(); return; }
+    if (e.target.closest('[data-up]')) $('input[type=file]', box).click();
+  });
+  $('input[type=file]', box).addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try { const r = await uploadIcon(f); await load(true); inp.value = r.name; prev(); toast(`Icon „${r.name}“ hochgeladen und gesetzt`); }
+    catch (er) { toast(er.message, true); }
+    e.target.value = '';
+  });
   inp.setAttribute('autocapitalize', 'none'); inp.setAttribute('spellcheck', 'false');
   prev();
 }
@@ -745,7 +764,7 @@ const devOpts = (skip) => [['', '– keins –'], ...S.devices.filter(d => d.id 
 function deviceForm(d) {
   const isNew = !d.id;
   openForm(isNew ? 'Neues Gerät' : esc(d.name), [
-    ['name', 'Name'], [['type', 'Typ', 'select', Object.entries(TYPES)], ['vlan_id', 'Netzwerk', 'select', vlanOpts()]],
+    ['name', 'Name'], [['type', 'Typ', 'select', typeOpts(d.type)], ['vlan_id', 'Netzwerk', 'select', vlanOpts()]],
     [['ip', 'IP-Adresse'], ['mac', 'MAC-Adresse']], [['hostname', 'Hostname'], ['url', 'Web-URL']],
     [['model', 'Modell'], ['os', 'System']], ['room', 'Raum', 'text', 'z. B. Wohnzimmer, Keller'], ['icon', 'Icon'],
     ['parent_id', 'Läuft auf / gehört zu', 'select', devOpts(d.id)], ['note', 'Kurzbeschreibung (eine Zeile auf der Karte)'],
@@ -789,7 +808,7 @@ function rackBlock(d, r) {
     `<img src="${icon(d)}" alt=""><span class="dot ${d.status}"></span><b>${esc(d.name)}</b><span class="ip">${esc(d.ip || d.model || '')}</span></div>`;
 }
 function renderRacks() {
-  const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d) && !['internet', 'client', 'iot', 'workstation', 'group', 'light', 'plug', 'sensor', 'thermostat', 'blind', 'lock', 'vacuum', 'camera', 'speaker', 'tv'].includes(d.type));
+  const free = S.devices.filter(d => !d.parent_id && !d.rack_id && !shelfOf(d) && !['internet', 'client', 'iot', 'workstation', 'group', 'light', 'plug', 'sensor', 'thermostat', 'blind', 'lock', 'vacuum', 'camera', 'speaker', 'tv', 'smartphone', 'tablet'].includes(bt(d.type)));
   let h = `<div class="page" style="max-width:none"><div class="bar"><h2>Racks</h2><button class="btn pri" data-act="newRack">+ Rack</button>` +
     `<span class="muted">Ziehen verschiebt · freie Höheneinheit antippen zum Einbauen von Geräten, Patchpanels, Rackböden und Blenden</span></div>`;
   if (!S.racks.length) h += '<div class="hint">Noch kein Rack angelegt.</div>';
@@ -942,7 +961,7 @@ function wlanSection() {
       `<div class="hint">${S.wlans.length ? 'Keine Treffer.' : 'Lege deine SSIDs an und ordne sie einem Netzwerk und den Access Points zu. Die SSIDs erscheinen dann auf den AP-Karten in der Topologie.'}</div>`);
 }
 function wlanForm(w) {
-  const isNew = !w.id, aps = S.devices.filter(d => !['app', 'service', 'internet', 'container', 'vm', 'client'].includes(d.type))
+  const isNew = !w.id, aps = S.devices.filter(d => !['app', 'service', 'internet', 'container', 'vm', 'client', 'smartphone', 'tablet'].includes(bt(d.type)))
     .sort((a, b) => (b.type === 'ap') - (a.type === 'ap') || a.name.localeCompare(b.name)).map(d => [d.id, d.name + (d.type === 'ap' ? '' : ' (' + (TYPES[d.type] || d.type) + ')')]);
   openForm(isNew ? 'Neues WLAN' : esc(w.ssid), [['ssid', 'SSID (Name des WLANs)'], ['vlan_id', 'Netzwerk / VLAN', 'select', vlanOpts()],
     [['band', 'Band', 'select', [['', '–'], ...BANDS.map(b => [b, b])]], ['security', 'Verschlüsselung', 'select', [['', '–'], ...SECS.map(b => [b, b])]]],
@@ -985,7 +1004,7 @@ function renderFinds() {
   const pend = S.discoveries.filter(d => d.state === 'pending'), ign = S.discoveries.filter(d => d.state === 'ignored');
   const card = d => {
     const g = d.guess || {}, v = vlan(d.vlan_id), titles = Object.entries(d.http || {}).filter(([, x]) => x.title).map(([p, x]) => `${p}: ${x.title}`);
-    return `<div class="box find"><div class="hd"><img src="/api/icon/${esc(g.icon || 'type-' + (g.type || 'other'))}" width="26" height="26" alt="">` +
+    return `<div class="box find"><div class="hd"><img src="${iconUrl(g.icon || typeIcon(g.type || 'other'))}" width="26" height="26" alt="">` +
       `<b>${esc(d.ip)}</b><span>${esc(d.hostname || '')}</span><span class="pill" style="margin-left:auto">${esc(TYPES[g.type] || 'Gerät')}</span></div>` +
       `<div class="muted" style="font-size:12.5px;margin-top:4px">${d.mac ? `<span class="mono">${esc(d.mac)}</span> · ${esc(d.vendor || 'Hersteller unbekannt')}` : 'keine MAC (anderes Subnetz oder ohne Host-Netz)'}` +
       `${v ? ` · <span style="color:${esc(v.color)}">${esc(v.name)}</span>` : ''}${g.os ? ' · ' + esc(g.os) : ''}</div>` +
@@ -1158,7 +1177,10 @@ function renderSystem() {
     `<span class="pill">${ROLE[S.role]}</span><button class="btn sm" style="margin-left:auto" data-act="logout">Abmelden</button></div><form class="f" id="pwf"><div class="two">` +
     `<label>Aktuelles Passwort<input name="current" type="password" autocomplete="current-password" required></label>` +
     `<label>Neues Passwort<input name="new" type="password" autocomplete="new-password" minlength="10" required></label></div>` +
-    `<div class="acts" style="margin:0"><button class="btn">Passwort ändern</button></div></form></div>`;
+    `<div class="acts" style="margin:0"><button class="btn">Passwort ändern</button></div></form></div>` +
+    `<h3 class="faint" style="margin-top:24px">Gerätetypen &amp; Icons</h3><div class="box tsys"><div class="tprev">${S.types.filter(t => !t.hidden && !PASSIVE.has(t.key)).slice(0, 14).map(t => `<img src="${iconUrl(typeIcon(t.key))}" alt="" width="22" height="22" title="${esc(t.label)}">`).join('')}</div>` +
+    `<p class="muted" style="margin:8px 0 12px;font-size:12.5px">${S.types.length} Typen, davon ${S.types.filter(t => t.custom).length} eigene · ${(S.icons || []).length} eigene Icons. Bezeichnung, Icon, Bereich und Erkennung anpassen, eigene Typen anlegen, Icons hochladen.</p>` +
+    `<button class="btn" data-act="goTypes">Typen &amp; Icons verwalten</button></div>`;
   if (admin) h += `<h3 class="faint" style="margin-top:24px">Benutzerverwaltung</h3><div class="box"><div id="users" class="muted">lädt …</div>` +
     `<p class="muted" style="font-size:12.5px;margin:10px 0"><b>Lesen</b>: alles ansehen · <b>Ändern</b>: dokumentieren, scannen, Anbindungen pflegen · ` +
     `<b>Admin</b>: zusätzlich Benutzer, Einstellungen, Export</p><form class="f" id="uf"><div class="two">` +
@@ -1245,6 +1267,16 @@ const ACT = {
     deviceForm({type: 'other', ip: d.ip, mac, name: ipamDevName(d.ip, c), hostname: ipamDevName(d.ip, c), vlan_id: s ? s.vlan_id : '', rack_height: 1});
   },
   ipamShow: d => { const b = $('#side [data-view=ipam]'); b.click(); ipamTab = 'addr'; ipamCellIp = d.ip; const go = () => { if (IPAM) ACT.ipamCellOpen({ip: d.ip}); else setTimeout(go, 200); }; go(); },
+  typeEdit: d => typeForm(S.types.find(t => t.key === d.k)),
+  typeNew: () => typeForm({}),
+  typeDel: d => {
+    const t = S.types.find(x => x.key === d.k), n = S.devices.filter(x => x.type === t.key).length;
+    const msg = t.custom ? `Typ „${t.label}“ löschen?${n ? `\n${n} Gerät${n === 1 ? '' : 'e'} bekommen den Typ „${(TYPEDEF[t.base] || {}).label || t.base}“.` : ''}` : `„${t.label}“ auf den Standard zurücksetzen (Bezeichnung, Icon, Bereich, Erkennung)?`;
+    if (confirm(msg)) run(async () => { await api('DELETE', '/api/types/' + encodeURIComponent(t.key)); await load(true); closePanel(); renderTypes(); }, t.custom ? 'Typ gelöscht' : 'Zurückgesetzt');
+  },
+  iconPick: () => { const f = document.createElement('input'); f.type = 'file'; f.multiple = true; f.accept = '.svg,.png,.webp,.jpg,.jpeg'; f.onchange = () => uploadFiles([...f.files]); f.click(); },
+  iconDel: d => { if (confirm(`Icon „${d.n}“ löschen?${+d.u ? `\nEs wird ${d.u}× verwendet – dort erscheint wieder das Standard-Symbol.` : ''}`)) run(async () => { await api('DELETE', '/api/icons/' + encodeURIComponent(d.n)); await load(true); renderTypes(); }, 'Icon gelöscht'); },
+  goTypes: () => { view = 'types'; document.querySelectorAll('#side button[data-view]').forEach(x => { const on = x.dataset.view === 'system'; x.classList.toggle('on', on); x.toggleAttribute('aria-current', on); }); $('#crumb').textContent = 'Gerätetypen & Icons'; closePanel(); render(); main.scrollTop = 0; },
   navEdit: () => navEditPanel(),
   newNav: () => navForm({}),
   editNav: d => navForm(S.navlinks.find(l => l.id === +d.id)),
@@ -1322,7 +1354,7 @@ const ACT = {
   bulkEdit: () => {
     const ids = [...multi], keep = [['', '– unverändert –']];
     openForm(`${ids.length} Geräte ändern`, [
-      [['type', 'Typ', 'select', [...keep, ...Object.entries(TYPES)]], ['vlan_id', 'Netzwerk', 'select', [...keep, ['none', '– keins –'], ...S.vlans.map(v => [v.id, v.vid != null ? `${vtag(v)} · ${v.name}` : v.name])]]],
+      [['type', 'Typ', 'select', [...keep, ...typeOpts()]], ['vlan_id', 'Netzwerk', 'select', [...keep, ['none', '– keins –'], ...S.vlans.map(v => [v.id, v.vid != null ? `${vtag(v)} · ${v.name}` : v.name])]]],
       ['parent_id', 'Läuft auf / gehört zu', 'select', [...keep, ['none', '– eigenständig –'], ...S.devices.filter(d => !multi.has(d.id) && !['app', 'service'].includes(d.type)).map(d => [d.id, d.name])]],
       [['model', 'Modell (leer = unverändert)'], ['os', 'System (leer = unverändert)']], ['room', 'Raum (leer = unverändert, „-“ = Raum entfernen)'], ['icon', 'Icon (leer = unverändert)'], ['note', 'Notiz (leer = unverändert)'],
     ], {}, async data => {
@@ -1451,6 +1483,88 @@ const ACT = {
   },
 };
 document.addEventListener('keydown', e => { if (e.key === 'Escape') navDrawer(false); });
+// ------------------------------------------------------------ Gerätetypen & Icons
+let typeQ = '';
+const AREA_LABEL = {network: 'Netzwerk', servers: 'Server', storage: 'Speicher', apps: 'Dienste', smarthome: 'Smarthome', clients: 'Endgeräte', other: 'Sonstiges'};
+const fileB64 = f => new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => no(new Error('Datei nicht lesbar')); r.readAsDataURL(f); });
+const iconName = fn => fn.replace(/\.[a-z0-9]+$/i, '').toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 40);
+async function uploadIcon(file, name) {
+  if (!/\.(svg|png|webp|jpe?g)$/i.test(file.name)) throw new Error(`${file.name}: nur SVG, PNG, WebP oder JPG`);
+  if (file.size > 512 * 1024) throw new Error(`${file.name}: größer als 512 KB`);
+  const data = await fileB64(file), body = {name: name || iconName(file.name), data};
+  try { return await api('POST', '/api/icons', body); }
+  catch (e) {
+    if (!/gibt es schon/.test(e.message) || !confirm(`${e.message}. Ersetzen?`)) throw e;
+    return api('POST', '/api/icons', {...body, replace: 1});
+  }
+}
+async function uploadFiles(files) {
+  let last = null, n = 0;
+  for (const f of files) { try { last = await uploadIcon(f); n++; } catch (e) { toast(e.message, true); } }
+  if (n) { await load(true); toast(n === 1 ? `Icon „${last.name}“ hochgeladen` : `${n} Icons hochgeladen`); if (view === 'types') renderTypes(); }
+  return last;
+}
+function renderTypes() {
+  const can = !ro(), q = fold(typeQ.trim());
+  const list = S.types.filter(t => !['patchpanel', 'shelf', 'blank', 'cablemgmt'].includes(t.key) || q).filter(t => !q || fold(`${t.label} ${t.key} ${t.default_label || ''}`).includes(q));
+  const used = {}; for (const d of S.devices) used[d.type] = (used[d.type] || 0) + 1;
+  const tile = t => `<button class="ttile${t.hidden ? ' hid' : ''}" ${can ? `data-act="typeEdit" data-k="${esc(t.key)}"` : ''} title="${esc(t.label)} (${esc(t.key)})">` +
+    `<img src="${iconUrl(typeIcon(t.key))}" alt="" width="34" height="34"><b>${esc(t.label)}</b><span class="mono">${esc(t.key)}</span>` +
+    `<em>${used[t.key] ? used[t.key] + ' Gerät' + (used[t.key] === 1 ? '' : 'e') : 'nicht verwendet'}</em>` +
+    `<i class="tags">${t.custom ? `<span class="tg c">eigener · wie ${esc((TYPEDEF[t.base] || {}).label || t.base)}</span>` : t.changed ? '<span class="tg">angepasst</span>' : ''}` +
+    `${t.hidden ? '<span class="tg">ausgeblendet</span>' : ''}${(t.rules.vendor.length + t.rules.hostname.length) ? '<span class="tg r">Erkennung</span>' : ''}</i></button>`;
+  let h = `<div class="page tpage"><div class="bar"><h2>Gerätetypen &amp; Icons</h2>${can ? '<button class="btn pri" data-act="typeNew">+ Eigener Typ</button><button class="btn" data-act="iconPick">Icons hochladen</button>' : ''}</div>` +
+    `<p class="muted tintro">Jeder Typ hat Bezeichnung, Icon, Bereich (Überwachung, Übersichten) und optional Stichwörter, an denen der Scan ihn erkennt. ` +
+    `Eigene Typen verhalten sich wie ihre Vorlage – etwa ob sie ins Rack passen oder als Endgerät gelten.</p>` +
+    `<input class="inp tsearch" id="typeq" type="search" placeholder="Typ suchen …" value="${esc(typeQ)}" aria-label="Typ suchen">`;
+  for (const [a, label] of Object.entries(AREA_LABEL)) {
+    const ts = list.filter(t => t.area === a);
+    if (ts.length) h += `<h3 class="tarea">${label} <span class="muted">${ts.length}</span></h3><div class="tgrid">${ts.map(tile).join('')}</div>`;
+  }
+  if (!list.length) h += '<div class="hint">Kein Typ passt zur Suche.</div>';
+  const icons = S.icons || [];
+  h += `<h3 class="tarea">Eigene Icons <span class="muted">${icons.length}</span></h3>` +
+    `<div class="idrop${can ? '' : ' ro'}" id="idrop">${icons.map(i => `<div class="itm"><img src="${iconUrl(i.name)}" alt="" width="40" height="40">` +
+      `<b title="${esc(i.name)}">${esc(i.label)}</b><span class="mono">${esc(i.name)}</span><em>${i.used ? i.used + '× verwendet' : 'nicht verwendet'} · ${i.kind.toUpperCase()}</em>` +
+      (can ? `<button class="btn sm bad" data-act="iconDel" data-n="${esc(i.name)}" data-u="${i.used}" aria-label="${esc(i.label)} löschen">×</button>` : '') + '</div>').join('')}` +
+    (can ? `<button class="itm add" data-act="iconPick"><span>+</span><b>Hochladen</b><em>SVG, PNG, WebP, JPG · bis 512 KB<br>oder Dateien hierher ziehen</em></button>` : '') + '</div>' +
+    `<p class="muted" style="font-size:12.5px;margin-top:10px">Ein hochgeladenes Icon heißt <span class="mono">up-name</span> und steht in jedem Icon-Feld zur Auswahl – ` +
+    `bei Typen, Geräten und Links im Menü. SVG-Dateien werden beim Hochladen von Skripten und externen Verweisen bereinigt.</p></div>`;
+  main.innerHTML = h;
+  const z = $('#idrop');
+  if (can && z) {
+    z.addEventListener('dragover', e => { e.preventDefault(); z.classList.add('over'); });
+    z.addEventListener('dragleave', () => z.classList.remove('over'));
+    z.addEventListener('drop', e => { e.preventDefault(); z.classList.remove('over'); uploadFiles([...e.dataTransfer.files]); });
+  }
+  $('#typeq').addEventListener('input', e => { typeQ = e.target.value; const pos = e.target.selectionStart; renderTypes(); const n = $('#typeq'); n.focus(); n.setSelectionRange(pos, pos); });
+}
+function typeForm(t) {
+  const isNew = !t.key, bases = S.types.filter(x => !x.custom && !x.special).map(x => [x.key, x.label]).sort((a, b) => a[1].localeCompare(b[1], 'de'));
+  const n = t.key ? S.devices.filter(d => d.type === t.key).length : 0;
+  const extra = isNew ? '' : t.custom ? `<button class="btn bad" type="button" data-act="typeDel" data-k="${esc(t.key)}">Typ löschen</button>`
+    : t.changed ? `<button class="btn" type="button" data-act="typeDel" data-k="${esc(t.key)}">Auf Standard zurücksetzen</button>` : '';
+  openForm(isNew ? 'Eigener Gerätetyp' : esc(t.label), [
+    ['label', isNew ? 'Bezeichnung' : `Bezeichnung${t.custom ? '' : ` (Standard: ${esc(t.default_label)})`}`, 'text', 'z. B. Smartwatch, USV, Wärmepumpe'],
+    ['icon', 'Icon'],
+    ...(isNew || t.custom ? [['base', 'Verhält sich wie', 'select', bases]] : []),
+    ['area', 'Bereich', 'select', Object.entries(AREA_LABEL)],
+    ['vendor', 'Erkennung: Hersteller enthält (durch Komma getrennt)', 'text', 'z. B. apple, samsung'],
+    ['hostname', 'Erkennung: Hostname enthält (durch Komma getrennt)', 'text', 'z. B. iphone, watch'],
+    ...(isNew ? [] : [['hidden', 'In der Typ-Auswahl ausblenden', 'check']]),
+  ], {base: 'other', area: 'other', ...t, icon: t.icon || '', vendor: (t.rules || {vendor: []}).vendor.join(', '), hostname: (t.rules || {hostname: []}).hostname.join(', ')}, async data => {
+    if (!data.label) throw new Error('Bezeichnung fehlt');
+    const body = {label: data.label, icon: data.icon.trim().toLowerCase(), area: data.area, rules: {vendor: data.vendor, hostname: data.hostname}};
+    if ('hidden' in data) body.hidden = data.hidden;
+    if (data.base) body.base = data.base;
+    if (isNew) await api('POST', '/api/types', body); else await api('PUT', '/api/types/' + encodeURIComponent(t.key), body);
+    await load(true); setTimeout(() => { if (view === 'types') renderTypes(); }, 0);
+  }, `${extra}${!isNew && n ? `<p class="muted" style="font-size:12.5px;margin-top:12px">${n} Gerät${n === 1 ? '' : 'e'} mit diesem Typ.</p>` : ''}` +
+    `<p class="muted" style="font-size:12.5px;margin-top:8px">Bereich: wo der Typ in Überwachung und Übersichten einsortiert wird. Erkennung: trifft ein Stichwort, schlägt der Scan diesen Typ vor (eigene Typen zuerst).</p>`);
+  const ic = $('[name=icon]', panel); if (ic && !ic.value) ic.placeholder = `leer = ${typeIcon(t.key || 'other')}`;
+  const base = $('[name=base]', panel);
+  if (base && isNew) base.addEventListener('change', () => { const a = $('[name=area]', panel); if (a && TYPEDEF[base.value]) { a.value = TYPEDEF[base.value].area; a.dispatchEvent(new Event('change')); } });
+}
 // ------------------------------------------------------------ Auswahlfelder mit Suche
 // Lange Auswahllisten bekommen ein Eingabefeld: Tippen grenzt ein (ohne Groß-/Kleinschreibung und Akzente),
 // Pfeiltasten wählen, Enter übernimmt. Das eigentliche <select> bleibt im Formular und trägt den Wert.
@@ -1743,7 +1857,7 @@ const navClosed = v => { try { if (v === undefined) return JSON.parse(localStora
 const navGroups = () => { const g = new Map(); for (const l of S.navlinks || []) { const k = l.grp || ''; if (!g.has(k)) g.set(k, []); g.get(k).push(l); } return [...g.entries()].sort((a, b) => (a[0] === '') - (b[0] === '') || a[0].localeCompare(b[0])); };
 function renderNavLinks() {
   const closed = navClosed(), link = l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" title="${esc(l.label)} – ${esc(l.url)}">` +
-    (l.icon ? `<img src="/api/icon/${esc(l.icon)}" alt="">` : NAV_LINK_ICO) + `<span class="nl">${esc(l.label)}</span>` +
+    (l.icon ? `<img src="${iconUrl(l.icon)}" alt="">` : NAV_LINK_ICO) + `<span class="nl">${esc(l.label)}</span>` +
     '<svg class="ext ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M11 7H6v11h11v-5"/></svg></a>';
   let h = '';
   for (const [g, ls] of navGroups().sort((a, b) => (b[0] === '') - (a[0] === ''))) {
@@ -1761,7 +1875,7 @@ $('#navlinks').addEventListener('click', e => {
   else if (e.target.closest('a,.tool')) navDrawer(false);
 });
 function navEditPanel() {
-  const row = l => `<div class="rowl">${l.icon ? `<img src="/api/icon/${esc(l.icon)}" alt="">` : NAV_LINK_ICO}<div style="min-width:0;flex:1"><b>${esc(l.label)}</b><small>${esc(l.url)}</small></div>` +
+  const row = l => `<div class="rowl">${l.icon ? `<img src="${iconUrl(l.icon)}" alt="">` : NAV_LINK_ICO}<div style="min-width:0;flex:1"><b>${esc(l.label)}</b><small>${esc(l.url)}</small></div>` +
     `<button class="btn sm" data-act="editNav" data-id="${l.id}">Ändern</button><button class="btn sm danger" data-act="delNav" data-id="${l.id}" aria-label="${esc(l.label)} löschen">×</button></div>`;
   sel = null;
   openPanel(`<div class="phead"><h2>Links im Menü</h2>${closeBtn}</div><div class="navedit"><p class="muted" style="margin:0 0 10px">Schnellzugriff auf Weboberflächen, z. B. Radarr oder das IPMI. ` +
@@ -1792,7 +1906,7 @@ function navForm(l) {
     $('[name=icon]', f).dispatchEvent(new Event('input', {bubbles: true}));
   });
 }
-const READ_OK = new Set(['ipamTab', 'ipamNet', 'ipamDnsFilter', 'ipamCellOpen', 'ipamCopy', 'ipamShow', 'monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
+const READ_OK = new Set(['goTypes', 'ipamTab', 'ipamNet', 'ipamDnsFilter', 'ipamCellOpen', 'ipamCopy', 'ipamShow', 'monArea', 'viewMode', 'close', 'cancel', 'show', 'goFinds', 'fit', 'vfilter', 'svgExport', 'logout', 'netMode', 'netSort', 'netCsv', 'jump']);
 const ro = () => S && S.role === 'read';
 document.head.insertAdjacentHTML('beforeend', '<style>' + Object.keys(ACT).filter(a => !READ_OK.has(a)).map(a => `body.ro [data-act="${a}"]`).join(',') + '{display:none!important}body.ro .rbody{cursor:default}body.ro .rdev{cursor:pointer}</style>');
 document.addEventListener('click', e => {

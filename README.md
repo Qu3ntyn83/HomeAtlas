@@ -88,6 +88,17 @@ als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links*
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
 | **System** | Intervalle, SNMP-Community, Export/Import. |
 
+## Gerätetypen & Icons
+
+Unter **System → Typen & Icons verwalten** lässt sich jeder Gerätetyp anpassen: Bezeichnung, Icon, Bereich (wo er in Überwachung und
+Übersichten einsortiert wird) und Stichwörter zur Erkennung (Hersteller oder Hostname enthält …), die der Scan nutzt. Eingebaute Typen
+lassen sich ausblenden und auf den Standard zurücksetzen. Eigene Typen verhalten sich wie eine gewählte Vorlage (etwa „wie Server“ –
+passt ins Rack); wird ein eigener Typ gelöscht, bekommen seine Geräte den Typ der Vorlage. Smartphone und Tablet sind eingebaut.
+
+**Eigene Icons** (SVG, PNG, WebP, JPG bis 512 KB) werden auf derselben Seite oder direkt in jedem Icon-Feld hochgeladen – auch per
+Ziehen und Ablegen – und heißen dann `up-name`. SVG-Dateien werden beim Hochladen von Skripten, Ereignis-Attributen und externen
+Verweisen bereinigt. Typen und Icons sind im Export enthalten.
+
 ## IPAM & DNS
 
 Die Seite **IPAM & DNS** verbindet die Dokumentation mit dem, was die OPNsense weiß: DNS-Einträge (Unbound-Host-Overrides oder
