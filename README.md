@@ -1,7 +1,8 @@
 # LabVis
 
-Interaktive Homelab-Dokumentation in **einem Docker-Container**: Topologie-Diagramm, Rack-Ansicht,
-VLANs/IP-Übersicht, automatischer Netzwerk-Scan und Anbindungen, die Systeme regelmäßig auslesen.
+Interaktive Homelab-Dokumentation in **einem Docker-Container**: Topologie, Racks, Netzwerke, IPAM und DNS, Internetzugang,
+Smarthome-Vernetzung und Überwachung – gefüllt von einem Netzwerk-Scan und von Anbindungen an Proxmox, Docker, OPNsense,
+Home Assistant, NAS und IPMI.
 
 ![Topologie: Geräte als Karten, Kabel nach Geschwindigkeit und VLAN gefärbt](docs/screenshots/topologie.png)
 
@@ -19,23 +20,49 @@ VLANs/IP-Übersicht, automatischer Netzwerk-Scan und Anbindungen, die Systeme re
 
 <sub>Die Bilder zeigen Beispieldaten aus dem homelab-diagram-Projekt.</sub>
 
-Die Idee kombiniert drei Projekte:
+## Funktionen auf einen Blick
 
-- **[Homelable](https://github.com/Pouzor/homelable)** – interaktiver Canvas, nmap-Scan mit Fundliste, Live-Status
-- **[homelab-diagram](https://github.com/Goblinmine/homelab-diagram)** – die Optik: Ordner-Karten, Kabelbreite = Link-Geschwindigkeit,
-  Trunks als helles Kabel mit dunklem Kern, Hardware-Kacheln, Container als Chips mit einer Zeile pro App
-- **[Overlook](https://github.com/bnlqn/overlook)** – der Aufbau der Überwachungs-Seite: was ist kaputt, wie geht es jedem Bereich, was war diese Woche
+| Bereich | Kurz |
+|---|---|
+| **Topologie** | Ordner-Karten, Kabelbreite = Geschwindigkeit, VLAN-Farben, VMs/Container als Chips, Räume, Bereiche, Größe ziehbar, SVG-Export |
+| **Verbindungen** | Kabel, WLAN, WAN, API, logisch und Smarthome: Zigbee, Z-Wave, Thread, Matter, BLE, DECT, Homematic IP, EnOcean, 433/868 MHz, LoRa, IR, MQTT, KNX, Feldbus, USB |
+| **Geräte** | mehrere Adressen je Gerät, Zusammenführen, Notizen, Sammeländerung, eigene Gerätetypen und hochgeladene Icons |
+| **Racks** | HE-genau, Patchpanels, Rackböden, Blenden, Kabelführungen |
+| **Netzwerke** | VLANs, IP-Raster und Adress-Tabelle mit CSV-Export, WLANs/SSIDs |
+| **IPAM & DNS** | Adresskarte je Netz, Konflikte, nächste freie Adresse, DNS-Abgleich; DNS-Einträge und DHCP-Reservierungen direkt in der OPNsense anlegen |
+| **Internetzugang** | Anbieter, Zugang, Bandbreite, IP-Art je Leitung; Zustand, Latenz und WAN-Adresse live aus der OPNsense |
+| **Überwachung** | Checks aus der Dokumentation erzeugen, Übersicht nach Overlook-Vorbild, ntfy/Webhook, Gatus-Export |
+| **Scan** | nmap mit Port-, Web- und SNMP-Erkennung, MACs anderer VLANs über die ARP-Tabelle der Firewall |
+| **Anbindungen** | Proxmox, Docker (lokal oder per Proxy), SNMP/LLDP, OPNsense, Home Assistant, QNAP, Synology, IPMI/Redfish |
+| **Oberfläche** | einklappbares Menü mit eigenen Links, Suchfelder in allen Auswahllisten, Handy-tauglich, Benutzer mit Lese-/Schreib-/Admin-Recht |
 
-Der Code ist eigenständig geschrieben (FastAPI + SQLite, Oberfläche ohne Build-Schritt).
+Die vollständige Liste steht in **[FEATURES.md](FEATURES.md)**.
 
 ## Start
 
 ```bash
-cp .env.example .env        # Passwort setzen
+git clone https://github.com/Qu3ntyn83/LabVis.git labvis && cd labvis
+cp .env.example .env        # Passwort für das erste Konto setzen
 docker compose up -d --build
 ```
 
-Danach: `http://<host>:8099`. Die Daten liegen in `./data`.
+Danach `http://<host>:8099` öffnen. Alle Daten liegen in `./data`.
+
+### Konfiguration
+
+| Einstellung | Wo | Bedeutung |
+|---|---|---|
+| `LABVIS_PASSWORD` | `.env` | legt beim ersten Start das erste Konto an; leer = Einrichtung im Browser |
+| `LABVIS_USER` | `docker-compose.yml` | Name des ersten Kontos (Standard `admin`) |
+| `LABVIS_PORT` | `docker-compose.yml` | Port der Weboberfläche (Standard `8099`) |
+| `TZ` | `docker-compose.yml` | Zeitzone |
+| `./data:/data` | Volume | Datenbank, Icon-Zwischenspeicher, hochgeladene Icons |
+| `/var/run/docker.sock` | Volume (`:ro`) | lokaler Docker für die Docker-Anbindung; Zeile entfernen, wenn nicht gewünscht |
+
+Scan-Takt, Abgleich der Anbindungen, SNMP-Community, Titel und Benachrichtigungs-Adresse stehen unter *System*.
+
+Der Container läuft im **Host-Netz** mit `NET_RAW`/`NET_ADMIN`: Nur so liefert der Scan MAC-Adressen im eigenen Netz und Ping funktioniert.
+Für andere VLANs muss die Firewall den Zugriff vom LabVis-Host erlauben; MAC-Adressen kommen dort aus der ARP-Tabelle der OPNsense.
 
 ## Aktualisieren
 
@@ -43,204 +70,30 @@ Danach: `http://<host>:8099`. Die Daten liegen in `./data`.
 ./update.sh
 ```
 
-Das Skript holt den aktuellen Stand, baut das Image neu, startet den Container frisch und zeigt am Ende, welche Version läuft.
-Die Version steht außerdem unten auf der Anmeldeseite und unter *System* („LabVis 0.7.0 · Build …"). Ändert sich der Build nach einem
-Update nicht, läuft noch der alte Container. Eine offene Seite lädt sich nach einem Update von selbst neu.
+Das Skript holt den aktuellen Stand, baut das Image neu, startet den Container frisch und zeigt am Ende die laufende Version.
+Die Version steht auch auf der Anmeldeseite und unter *System*. Eine offene Seite lädt sich nach einem Update von selbst neu.
 
-## Anmeldung
+## Anmeldung und Rechte
 
-LabVis hat eine eigene Anmeldeseite mit Benutzerkonten:
-
-- **Erstes Konto:** Ist `LABVIS_PASSWORD` in der `.env` gesetzt, wird beim ersten Start das Konto `LABVIS_USER` (Standard `admin`)
-  damit angelegt. Ohne die Variable fragt die Seite beim ersten Aufruf nach Benutzername und Passwort. Richte das Konto in diesem
-  Fall direkt nach dem Start ein – bis dahin kann es jeder im Netz anlegen.
-- Die Variablen wirken nur, solange es noch kein Konto gibt. Danach änderst du Passwörter unter *System → Konto*.
-- Weitere Benutzer legt ein Admin unter *System → Benutzerverwaltung* an und vergibt dort eines von drei Rechten:
+- **Erstes Konto:** über `LABVIS_PASSWORD`, sonst fragt die Seite beim ersten Aufruf nach Benutzername und Passwort – dann direkt
+  nach dem Start einrichten, bis dahin könnte es jeder im Netz tun. Die Variablen wirken nur, solange es kein Konto gibt.
+- Weitere Benutzer legt ein Admin unter *System → Benutzerverwaltung* an:
 
   | Recht | darf |
   |---|---|
-  | **Lesen** | alles ansehen, SVG exportieren, das eigene Passwort ändern |
-  | **Ändern** | zusätzlich Geräte, Kabel, Racks und Netzwerke pflegen, Scans starten, Funde übernehmen, Anbindungen einrichten |
-  | **Admin** | zusätzlich Benutzer verwalten, Systemeinstellungen ändern, Daten exportieren und wiederherstellen |
+  | **Lesen** | alles ansehen, SVG exportieren, eigenes Passwort ändern |
+  | **Ändern** | zusätzlich dokumentieren, scannen, Anbindungen und Checks pflegen, DNS/DHCP in der OPNsense ändern (wenn freigegeben) |
+  | **Admin** | zusätzlich Benutzer, Systemeinstellungen, Export und Wiederherstellung |
 
-  Das erste Konto ist immer Admin. Die Rechte prüft der Server; die Oberfläche blendet gesperrte Funktionen nur zusätzlich aus.
-- Passwörter liegen als scrypt-Hash in der Datenbank, Sitzungen als HttpOnly-Cookie (30 Tage). Ein Passwortwechsel meldet alle
-  anderen Sitzungen des Kontos ab. Nach fünf Fehlversuchen wird die Anmeldung von dieser Adresse kurz gesperrt.
+- Passwörter als scrypt-Hash, Sitzungen als HttpOnly-Cookie (30 Tage); ein Passwortwechsel meldet die anderen Sitzungen ab;
+  nach fünf Fehlversuchen ist die Anmeldung von dieser Adresse kurz gesperrt.
 - **Passwort vergessen:** `docker compose exec labvis python -c "from app import db; db.x('DELETE FROM sessions'); db.x('DELETE FROM users')"`
   löscht alle Konten; danach greift wieder die Ersteinrichtung.
 
-Der Container läuft im **Host-Netz** mit `NET_RAW`. Nur so liefert der Scan MAC-Adressen und Hersteller
-für das Netz, in dem der Docker-Host selbst hängt. Für andere VLANs gilt: Die Firewall muss den Scan vom
-Docker-Host aus erlauben, MAC-Adressen gibt es dort nicht (Erkennung dann über Ports, Web-Titel und SNMP).
-
-## Bereiche
-
-Das Menü steht links und lässt sich auf eine Symbolleiste einklappen (der Browser merkt sich die Wahl); auf dem Handy öffnet es sich
-als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links** – etwa zu Radarr oder zum IPMI –, auf Wunsch in aufklappbaren Kategorien
-(„Links bearbeiten" im Menü; Adresse und Icon lassen sich aus einem dokumentierten Gerät übernehmen). In der Topologie lassen sich Bereiche und Karten mit Inhalt am Griff unten rechts in der Größe ziehen (zweimal antippen = automatische Größe). Über „Zum Startbildschirm hinzufügen" lässt sich LabVis mit eigenem Symbol wie eine App ablegen.
-
-| Bereich | Inhalt |
-|---|---|
-| **Topologie** | Karten frei verschieben, zoomen, VLAN-Filter, Klick öffnet Details, Gerätesuche springt zur Karte. VMs/Container erscheinen als Chips im Host, deren Container als Zeilen. Export als SVG. |
-| **Racks** | Racks mit beliebig vielen HE, Geräte per Ziehen umsetzen, freie HE antippen zum Einbauen. Platzhalter für Patchpanels (mit Portanzahl), Rackböden (mit den Geräten, die darauf stehen), Blenden und Kabelführungen. |
-| **Netzwerke** | VLANs mit Subnetz, Gateway, Farbe und Regel. Ansicht als Raster (IP-Belegung je Netz) oder als sortierbare Tabelle aller Adressen mit Suche, Netzwerk-Filter und CSV-Export. |
-| **Funde** | Was der Scan gefunden hat und noch nicht dokumentiert ist – mit Typ-Vermutung, Schnittstellen-Vorschlägen und Suche. |
-| **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
-| **System** | Intervalle, SNMP-Community, Export/Import. |
-
-## Internetzugang
-
-Ein Gerät vom Typ **Internet** steht für eine Leitung (bei zwei Anbietern zwei Geräte). Unter „Anschluss eintragen" stehen Anbieter,
-Zugangsart (Glasfaser, VDSL, Kabel, LTE/5G, Satellit, Richtfunk), Bandbreite, IPv4-Art (dynamisch, statisch, CGNAT, DS-Lite),
-IPv6-Präfix, DynDNS-Name, Modem/ONT, Kundennummer, Störungs-Hotline und Vertragsdaten. Die Karte zeigt Anbieter, öffentliche Adresse,
-Zugang und Bandbreite. Die Verbindungsart **Internetzugang (WAN)** wird orange gezeichnet (Funkzugänge gepunktet) und mit Zugang und
-Bandbreite beschriftet; „WAN-Verbindung anlegen" im Gerät verbindet die Leitung mit Firewall bzw. Router.
-
-Mit OPNsense-Anbindung kommen pro Leitung der Gateway-Zustand (online, Paketverlust, Latenz, Prüfziel), die WAN-Adresse (IPv4/IPv6)
-und ein Hinweis auf doppeltes NAT oder CGNAT dazu; der Status des Internet-Geräts folgt dem Gateway. Gibt es nur eine Leitung und ein
-Gateway, ordnet LabVis beides selbst zu.
-
-## Verbindungsarten
-
-Neben Kabel, WLAN, API und logisch kennt LabVis die gängigen Smarthome-Wege: **Zigbee, Z-Wave, Thread, Matter, Bluetooth/BLE,
-DECT ULE, Homematic IP, EnOcean, Funk 433/868 MHz, LoRa, Infrarot, MQTT, KNX, Feldbus** (RS-485, Modbus, 1-Wire) und **USB/seriell**
-(z. B. ein Funkstick am Home-Assistant-Host). Funk wird gepunktet, Busse gestrichelt, MQTT mit Pfeil zum Broker gezeichnet, jede Art
-in eigener Farbe und mit Namen an der Linie; die Legende zeigt die verwendeten Arten. Das Formular blendet nur die passenden Felder ein
-(Geschwindigkeit, VLAN und Trunk nur bei Kabel).
-
-Geräte, die als Chip unter einer Bridge hängen, tragen ihre **Vernetzung** (z. B. Zigbee über die Hue Bridge) als farbige Marke. Der
-Home-Assistant-Import setzt sie aus der Integration (Hue, ZHA, deCONZ → Zigbee, Z-Wave JS → Z-Wave, FRITZ!Box → DECT, Homematic IP …);
-im Gerät lässt sie sich ändern.
-
-## Gerätetypen & Icons
-
-Unter **System → Typen & Icons verwalten** lässt sich jeder Gerätetyp anpassen: Bezeichnung, Icon, Bereich (wo er in Überwachung und
-Übersichten einsortiert wird) und Stichwörter zur Erkennung (Hersteller oder Hostname enthält …), die der Scan nutzt. Eingebaute Typen
-lassen sich ausblenden und auf den Standard zurücksetzen. Eigene Typen verhalten sich wie eine gewählte Vorlage (etwa „wie Server“ –
-passt ins Rack); wird ein eigener Typ gelöscht, bekommen seine Geräte den Typ der Vorlage. Smartphone und Tablet sind eingebaut.
-
-**Eigene Icons** (SVG, PNG, WebP, JPG bis 512 KB) werden auf derselben Seite oder direkt in jedem Icon-Feld hochgeladen – auch per
-Ziehen und Ablegen – und heißen dann `up-name`. SVG-Dateien werden beim Hochladen von Skripten, Ereignis-Attributen und externen
-Verweisen bereinigt. Typen und Icons sind im Export enthalten.
-
-## IPAM & DNS
-
-Die Seite **IPAM & DNS** verbindet die Dokumentation mit dem, was die OPNsense weiß: DNS-Einträge (Unbound-Host-Overrides oder
-Dnsmasq-Hosts), DHCP-Leases und -Reservierungen (Kea, Dnsmasq, lesend auch ISC DHCP) und die ARP-Tabelle. Gelesen wird beim
-Abgleich der OPNsense-Anbindung.
-
-- **Netze:** Übersicht aller Netze mit Mini-Karte, Belegung, Konflikten und nächster freier Adresse; jedes Netz ist auch als
-  Unterpunkt im Seitenmenü erreichbar. Adressen, die die Firewall kennt, die aber in keinem dokumentierten Netz liegen, erscheinen
-  als Hinweis auf ein fehlendes Netz – mit „Netz anlegen".
-- **Adressen:** je Netz eine Adresskarte – dokumentiert, nicht dokumentiert (im Netz gesehen), Gateway, Reservierung, nur DNS,
-  DHCP-Bereich – mit Belegung, nächster freier Adresse außerhalb des DHCP-Bereichs und Hinweisen.
-- **Konflikte:** mehrere Geräte mit derselben Adresse, Reservierung oder ARP-Antwort mit anderer MAC als dokumentiert,
-  feste Adresse im DHCP-Bereich ohne Reservierung.
-- **ARP der Firewall:** Ein Scan sieht MAC-Adressen nur im eigenen Netz. Die ARP-Tabelle der OPNsense kennt sie aus allen
-  gerouteten Netzen: LabVis ergänzt damit fehlende MACs und Hersteller an Geräten und Funden, nimmt beim Scan auch Geräte auf,
-  die auf Ping nicht antworten, und meldet Geräte, deren MAC jetzt unter einer anderen Adresse antwortet („Adresse übernehmen").
-- **DNS:** jeder Eintrag mit Abgleich, nach Netzen gruppiert (passt · Adresse veraltet · kein Gerät · doppelt) und die Liste der Geräte ohne DNS-Eintrag.
-- **Schreiben:** Mit dem Haken „Änderungen … erlauben" in der Anbindung legt LabVis DNS-Einträge an, ändert und löscht sie und
-  legt DHCP-Reservierungen an (Kea oder Dnsmasq; ISC DHCP hat dafür keine Schnittstelle). Danach lädt LabVis den Dienst neu.
-
-Der API-Benutzer der OPNsense braucht Leserechte auf Unbound/Dnsmasq, Kea und die ARP-Tabelle, zum Schreiben zusätzlich Schreibrechte
-auf diese Dienste. Benutzer mit Leserecht in LabVis sehen alles, ändern aber nichts.
-
-## Überwachung
-
-Aus der Dokumentation wird mit einem Klick ein Monitoring: **Überwachung → Aus Dokumentation erzeugen** legt je Gerät mit IP einen
-Ping an, je bekanntem Dienst-Port (SSH, Proxmox, SMB, DNS …) einen Port-Check und je Weboberfläche einen HTTP-Check. Du wählst, für welche
-Bereiche (Netzwerk, Server, Speicher, Dienste, Smarthome); Clients und Rack-Platzhalter werden nie überwacht. Eigene Checks legst du mit
-**+ Check** oder direkt im Gerät an.
-
-- **Übersicht** nach dem Vorbild von [Overlook](https://github.com/bnlqn/overlook): was ist los, wie geht es jedem Bereich
-  (in Ordnung / beeinträchtigt / ausgefallen), die letzten 30 Ergebnisse je Check, Verfügbarkeit der letzten 24 Stunden, Ereignisse der Woche.
-- **Problem** ist ein Check erst nach zwei Fehlschlägen in Folge; nach dem ersten wird schon nach 15 Sekunden erneut geprüft.
-- **Noch nie erreichbar** ist kein Ausfall, sondern ein falsches Ziel: solche Checks melden nichts und lassen sich gesammelt entfernen.
-- **Topologie:** Der Ping-Check führt den Gerätestatus mit; läuft ein Gerät, aber einer seiner Dienste nicht, wird sein Punkt gelb.
-- **Benachrichtigung:** unter *System* eine ntfy-Adresse (`https://ntfy.sh/dein-thema`) oder einen Webhook eintragen, der Text per POST
-  annimmt. Gemeldet werden Ausfall und Erholung; mehrere Meldungen innerhalb weniger Sekunden kommen als eine.
-- **Gatus-Export:** die Checks als `endpoints`-Konfiguration für Gatus, falls du Gatus als Prüfmaschine und Overlook als Übersicht nutzen willst.
-
-Geprüft wird vom LabVis-Container aus (Standard alle 60 Sekunden, je Check einstellbar). Verlauf: Einzelergebnisse 12 Stunden,
-Stundenwerte 8 Tage, Ereignisse 30 Tage.
-
-## Scan und Erkennung
-
-1. `nmap -sn` findet Hosts (im eigenen Netz per ARP, inklusive MAC und Hersteller).
-2. Ein Port-Scan prüft rund 50 typische Ports, dazu Web-Titel und eine SNMP-Abfrage.
-3. `app/fingerprints.py` leitet daraus Typ, Icon und Vorschläge ab, z. B.:
-
-| Indiz | Vorschlag |
-|---|---|
-| Port 8006 / Titel „Proxmox Virtual Environment" | Proxmox-API *(Connector)* |
-| Port 2375/2376, Portainer, Dockhand | Docker-API *(Connector)* |
-| Antwort auf SNMP, Hersteller Aruba/HP/Cisco/MikroTik … | SNMP *(Connector)* |
-| Titel „OPNsense" | OPNsense-API *(Connector, experimentell)* |
-| Port 8123 / Titel „Home Assistant" | Home-Assistant-API *(Connector)* |
-| Hersteller QNAP / Titel „QTS" | QNAP-API *(Connector)*: Modell, Firmware, Netzwerkkarten, Platten mit SMART-Zustand, Volumes |
-| Hersteller Synology / Ports 5000+5001 | Synology-DSM-API *(Connector)*: Modell, DSM-Version, Netzwerkkarten, Platten, Volumes |
-| Port 623 / Supermicro, iDRAC, iLO | IPMI über Redfish *(Connector)*: Mainboard, BIOS/BMC-Version, Zustand, Sensoren, Netzteile |
-| TrueNAS, UniFi, Checkmk, FRITZ!Box, Windows, SSH | Hinweis auf die passende Schnittstelle (noch kein Connector) |
-
-Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status aus dem Scan.
-
-## Verbindungsarten
-
-Eine Verbindung zwischen zwei Geräten ist entweder ein **Kabel** (Breite = Geschwindigkeit, Trunk hell mit dunklem Kern), eine
-**API-Verbindung** (gestrichelt, mit Pfeil vom abfragenden zum abgefragten System und Protokoll als Beschriftung, z. B. „API · REST :8006")
-**WLAN** (gepunktet in VLAN-Farbe) oder **logisch** (fein gepunktet, grau, etwa VPN oder Cloud). Im Gerät legt „API-Verbindung" direkt eine solche an.
-
-## WLAN
-
-Unter *Netzwerke → WLAN* legst du SSIDs an: Name, Netzwerk/VLAN, Band, Verschlüsselung und die Access Points, die sie ausstrahlen.
-Die SSIDs erscheinen als Pillen auf den AP-Karten. Funkverbindungen zeichnest du als Verbindung der Art **WLAN** (gepunktet, in der
-Farbe des zugehörigen VLANs, beschriftet mit der SSID). SSIDs und WLAN-Clients werden von Hand gepflegt; einen UniFi-Abgleich gibt es noch nicht.
-
-## Notizen am Gerät
-
-Neben der einzeiligen Kurzbeschreibung hat jedes Gerät ein mehrzeiliges Feld **Notizen**. Im Gerät blendet ein Knopf die Notizen auf der
-Karte ein oder aus: eingeblendet erscheinen sie als Notizzettel auf der Karte (bis zu sechs Zeilen), bei VMs und Containern als eine
-Zeile im Chip. Ausgeblendet bleiben sie im Gerät lesbar.
-
-## Räume
-
-Jedes Gerät hat ein Feld **Raum** (mit Vorschlagsliste der schon verwendeten Räume; auch über die Sammeländerung setzbar). In der
-Topologie schaltet **Normal | Räume** die Ansicht um: In der Raum-Ansicht steht je Raum eine Karte mit den Geräten darin, Verbindungen
-laufen zwischen den Räumen. VMs und Container zählen zum Raum ihres Hosts; Geräte ohne eigenen Eintrag übernehmen den Standort ihres
-Racks. Die Position der Raumkarten merkt sich der Browser.
-
-## Bereiche und Smarthome
-
-Mit **+ Bereich** oder über die Mehrfachauswahl (**Gruppieren**) fasst du Geräte in der Topologie zu einem Bereich zusammen, etwa alle
-Smarthome-Lampen. Der Bereich erscheint als gestrichelte Karte, die Geräte darin als Chips mit Status; Verbindungen zu einem Gerät im
-Bereich enden an der Bereichskarte. „Bereich auflösen" gibt die Geräte wieder frei, gelöscht wird dabei nichts.
-
-Für Smarthome gibt es eigene Gerätetypen mit Symbol: Lampe, Steckdose, Sensor, Thermostat, Rollladen, Türschloss, Saugroboter, Kamera,
-Lautsprecher, TV/Medien.
-
-## Mehrere Geräte auf einmal ändern
-
-In der Topologie „Auswählen" antippen (oder Strg/Umschalt + Klick) und Karten oder Chips markieren; in der Adress-Tabelle gibt es
-dafür Kontrollkästchen. Die Leiste am unteren Rand ändert dann Typ, Netzwerk, Host, Modell, System, Icon oder Notiz für alle
-markierten Geräte, führt sie zusammen oder löscht sie.
-
-## Geräte mit mehreren Netzwerkkarten
-
-Ein Gerät kann beliebig viele Adressen haben (z. B. ein NAS mit vier NICs in zwei VLANs):
-
-- **Zusammenführen** (im Gerät): Ein zweiter Eintrag geht in diesem auf. Seine IP/MAC wird zur weiteren Adresse, Kabel, enthaltene
-  Geräte und Anbindungen wandern mit.
-- **Zu Gerät hinzufügen** (unter *Funde*): Ein neu gefundener Host wird direkt als weitere Adresse an ein vorhandenes Gerät gehängt.
-- **+ Adresse** (im Gerät): Adresse von Hand eintragen, etwa für ein Storage-Netz, das der Scanner nicht erreicht.
-
-Jede Adresse hat eine Bezeichnung und eine Notiz. **Als Hauptadresse** tauscht eine weitere Adresse mit der Hauptadresse – IP, MAC,
-Hostname, Netzwerk, Bezeichnung und Notiz wandern jeweils mit; die Hauptadresse ist die, die auf der Karte steht.
-
-Der Scan erkennt jede Adresse einzeln wieder. Das Gerät gilt als online, solange mindestens eine Adresse antwortet; die IP-Übersicht
-zeigt den Zustand je Adresse.
-
 ## Anbindungen einrichten
+
+Anbindungen legst du unter *Anbindungen* an. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund; passende Treffer sind markiert.
+Der Scan schlägt die passende Anbindung auch selbst vor.
 
 **Proxmox** – read-only Token:
 
@@ -272,8 +125,14 @@ services:
     ports: ["2375:2375"]     # nur intern erreichbar machen!
 ```
 
-**SNMP (v2c)** – liest Systemname, Ports mit Status, Geschwindigkeit und PVID sowie LLDP-Nachbarn. Stimmt der
-Nachbarname mit einem dokumentierten Gerät überein, entsteht daraus automatisch ein Kabel mit der ausgehandelten Geschwindigkeit.
+**SNMP (v2c)** – Community unter *System*. Liest Systemname, Ports mit Status, Geschwindigkeit und PVID sowie LLDP-Nachbarn.
+Stimmt ein Nachbarname mit einem dokumentierten Gerät überein, entsteht daraus ein Kabel mit der ausgehandelten Geschwindigkeit.
+
+**OPNsense** – API-Key und Secret (System → Zugang → Benutzer → API-Schlüssel), Adresse und Port der Weboberfläche (80 = ohne TLS).
+Der API-Benutzer braucht Leserechte auf Schnittstellen/VLANs, Unbound bzw. Dnsmasq, Kea, ARP-Tabelle und Gateways. Gelesen werden VLANs
+und Subnetze sowie alles für *IPAM & DNS* und *Internetzugang*. Mit dem Haken „Änderungen an DNS-Einträgen und DHCP-Reservierungen
+erlauben“ (und Schreibrechten des API-Benutzers) kann LabVis DNS-Einträge und Reservierungen anlegen, ändern und löschen.
+Ohne TLS gehen API-Schlüssel unverschlüsselt durchs Netz – für den Schreibzugriff die Weboberfläche besser auf HTTPS umstellen.
 
 **Home Assistant** – URL (`http://<ha>:8123`) und ein langlebiges Zugriffstoken (HA: Profil → Sicherheit). Der erste Abruf zeigt nur,
 welche Integrationen wie viele Geräte haben. Unter *Bearbeiten* wählst du aus, welche übernommen werden (z. B. `hue`, `tplink`,
@@ -286,20 +145,49 @@ welche Integrationen wie viele Geräte haben. Unter *Bearbeiten* wählst du aus,
 - HA-Bereiche werden zu Räumen, „unavailable" zu offline. Reine Anwesenheits-Tracker werden nie als Gerät angelegt.
 - Die Platzierung passiert nur beim ersten Mal; verschiebst du ein Gerät, bleibt das so.
 
-**OPNsense** – API-Key und Secret eines Benutzers mit Leserechten auf die Interfaces; importiert VLANs und Subnetze.
+**QNAP** und **Synology** – QTS bzw. DSM kennen keine API-Schlüssel. Am NAS einen eigenen Benutzer in der Gruppe *administrators*
+anlegen, ohne zweistufige Anmeldung, mit langem Zufallspasswort und ohne Zugriff auf Freigaben. LabVis meldet sich an, liest Modell,
+Firmware, Netzwerkkarten, Platten und Volumes und meldet sich wieder ab. Ports: QNAP 443 (8080 ohne TLS), Synology 5001 (5000 ohne TLS).
 
-## Import aus homelab-diagram
+**IPMI / Redfish** (Supermicro, iDRAC, iLO) – Adresse des BMC und ein Benutzer (Operator oder ReadOnly). Unter „Gehört zu Gerät“ den Server
+wählen: die BMC-Adresse wird dann dessen zusätzliche Adresse „IPMI“, die Kacheln (Mainboard, Zustand, Sensoren, Netzteile) erscheinen am Server.
+Ältere Boards brauchen eine aktuelle BMC-Firmware für Redfish.
 
-Unter *System → inventory.yaml importieren* wird eine Datei im Format von homelab-diagram eingelesen
-(VLANs, Firewall, Switch-Ports, Geräte, Server mit Gästen und Apps, Kabel).
+## Typische Abläufe
 
-## Stand und Grenzen
+- **Erster Überblick:** Netzwerke mit Subnetz anlegen → Scan → unter *Funde* übernehmen → Anbindungen einrichten → *Auto-Layout*.
+- **Monitoring aufbauen:** *Überwachung → Aus Dokumentation erzeugen*, Bereiche wählen; unter *System* ntfy-Adresse eintragen.
+- **DNS aufräumen:** *IPAM & DNS → DNS*: veraltete Einträge mit „auf … ändern“ korrigieren, fehlende Geräte auswählen und gesammelt anlegen.
+- **Eigenen Gerätetyp:** *System → Typen & Icons verwalten → + Eigener Typ*, Icon direkt im Icon-Feld hochladen.
+- **Import aus homelab-diagram:** *System → inventory.yaml importieren* (VLANs, Firewall, Switch-Ports, Geräte, Server mit Gästen und Apps, Kabel).
 
-- Getestet: API, Scan-Ablauf, Proxmox- und Docker-Sync gegen Test-Server, SNMP/LLDP-Auswertung mit Beispieldaten, Container-Build und -Start, Anmeldung (Einrichtung, Login, Sperre, Passwortwechsel, Benutzerverwaltung, Rechte Lesen/Ändern/Admin).
-- **Nicht** gegen echte Geräte getestet: SNMP-Abruf an realen Switches und der OPNsense-Connector (API-Pfade können je Version abweichen).
-- Zugangsdaten der Anbindungen liegen unverschlüsselt in `data/labvis.db` – das Verzeichnis entsprechend schützen.
+## Datensicherung
+
+*System → Export (JSON)* (Admin) speichert alles: Geräte, Kabel, Racks, Netzwerke, WLANs, Anbindungen samt Zugangsdaten, Checks,
+Menü-Links, Gerätetypen, eigene Icons und Einstellungen. *Export wiederherstellen* spielt ihn wieder ein und ersetzt dabei alle Daten; ältere Exporte bleiben lesbar.
+Für eine vollständige Sicherung genügt auch eine Kopie von `./data` bei gestopptem Container.
+
+## Sicherheit und Grenzen
+
+- Zugangsdaten der Anbindungen liegen unverschlüsselt in `data/labvis.db` und im Export – beides entsprechend schützen.
 - Für Zugriff von außen gehört ein Reverse Proxy mit TLS davor; das Sitzungs-Cookie wird dann nur noch über HTTPS gesendet.
+- Der eingebundene Docker-Socket entspricht Root-Rechten auf dem Host, auch schreibgeschützt; LabVis sendet nur lesende Abfragen.
+- Hochgeladene SVG-Icons werden bereinigt und mit strenger Content-Security-Policy ausgeliefert.
+- Getestet gegen nachgebaute Dienste und im Browser. **Nicht** an echten Geräten getestet: SNMP an realen Switches, OPNsense (inkl. IPAM,
+  Gateways, Schreibzugriff), QNAP, Synology, IPMI/Redfish und der Home-Assistant-Import mit echten Bridges. API-Pfade können je Version abweichen;
+  Fehlermeldungen der Anbindungen nennen dann den betroffenen Teil.
 - Service-Icons werden beim ersten Bedarf von [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) geladen und in `data/icons` abgelegt.
+
+## Herkunft
+
+Die Idee kombiniert drei Projekte:
+
+- **[Homelable](https://github.com/Pouzor/homelable)** – interaktiver Canvas, nmap-Scan mit Fundliste, Live-Status
+- **[homelab-diagram](https://github.com/Goblinmine/homelab-diagram)** – die Optik: Ordner-Karten, Kabelbreite = Link-Geschwindigkeit,
+  Trunks als helles Kabel mit dunklem Kern, Hardware-Kacheln, Container als Chips
+- **[Overlook](https://github.com/bnlqn/overlook)** – der Aufbau der Überwachungs-Seite
+
+Der Code ist eigenständig geschrieben (FastAPI + SQLite, Oberfläche ohne Build-Schritt).
 
 ## Lizenz und Dank
 

@@ -3,7 +3,7 @@
 proxmox  – API-Token (read-only, Rolle PVEAuditor)
 docker   – Docker-Engine-API, am besten über einen read-only docker-socket-proxy
 snmp     – v2c über die net-snmp-Werkzeuge: Ports, Geschwindigkeit, PVID, LLDP-Nachbarn
-opnsense – API-Key/Secret: VLANs und Subnetze (experimentell)
+opnsense – API-Key/Secret: VLANs, Subnetze, DNS, DHCP, ARP, Gateways (IPAM & DNS, Internetzugang)
 """
 import base64
 import http.client
@@ -494,7 +494,7 @@ def apply_lldp(dev_id, ifaces):
     return made
 
 
-# ------------------------------------------------------------------ OPNsense (experimentell)
+# ------------------------------------------------------------------ OPNsense
 class OpnClient:
     """Zugang zur OPNsense-API. Befehle werden in der neuen Schreibweise (search_host_override) aufgerufen; ältere
     Versionen kennen nur camelCase (searchHostOverride) – darauf wird bei 404 ausgewichen."""
