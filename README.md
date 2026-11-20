@@ -88,6 +88,18 @@ als Schublade über das Menü-Symbol. Unter den Bereichen stehen **eigene Links*
 | **Anbindungen** | Proxmox, Docker, SNMP, OPNsense. Beim Anlegen wählst du ein dokumentiertes Gerät oder einen Fund aus; Adresse und Name werden übernommen, passende Treffer sind mit ★ markiert. |
 | **System** | Intervalle, SNMP-Community, Export/Import. |
 
+## Internetzugang
+
+Ein Gerät vom Typ **Internet** steht für eine Leitung (bei zwei Anbietern zwei Geräte). Unter „Anschluss eintragen" stehen Anbieter,
+Zugangsart (Glasfaser, VDSL, Kabel, LTE/5G, Satellit, Richtfunk), Bandbreite, IPv4-Art (dynamisch, statisch, CGNAT, DS-Lite),
+IPv6-Präfix, DynDNS-Name, Modem/ONT, Kundennummer, Störungs-Hotline und Vertragsdaten. Die Karte zeigt Anbieter, öffentliche Adresse,
+Zugang und Bandbreite. Die Verbindungsart **Internetzugang (WAN)** wird orange gezeichnet (Funkzugänge gepunktet) und mit Zugang und
+Bandbreite beschriftet; „WAN-Verbindung anlegen" im Gerät verbindet die Leitung mit Firewall bzw. Router.
+
+Mit OPNsense-Anbindung kommen pro Leitung der Gateway-Zustand (online, Paketverlust, Latenz, Prüfziel), die WAN-Adresse (IPv4/IPv6)
+und ein Hinweis auf doppeltes NAT oder CGNAT dazu; der Status des Internet-Geräts folgt dem Gateway. Gibt es nur eine Leitung und ein
+Gateway, ordnet LabVis beides selbst zu.
+
 ## Verbindungsarten
 
 Neben Kabel, WLAN, API und logisch kennt LabVis die gängigen Smarthome-Wege: **Zigbee, Z-Wave, Thread, Matter, Bluetooth/BLE,
