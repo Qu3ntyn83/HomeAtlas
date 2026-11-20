@@ -16,13 +16,13 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import Response
 
-from . import db
+from . import db, types
 
 router = APIRouter(prefix="/api/monitor")
 THRESHOLD = 2            # Fehlschläge in Folge, ab denen ein Check als Problem gilt
 PASSIVE = {"patchpanel", "shelf", "blank", "cablemgmt", "group", "internet"}
 AREAS = {"network": "Netzwerk", "servers": "Server", "storage": "Speicher", "apps": "Dienste", "smarthome": "Smarthome",
-         "other": "Sonstiges"}
+         "clients": "Endgeräte", "other": "Sonstiges"}
 TYPE_AREA = {"router": "network", "firewall": "network", "switch": "network", "ap": "network",
              "hypervisor": "servers", "server": "servers", "vm": "servers", "workstation": "servers",
              "nas": "storage", "container": "apps", "app": "apps", "service": "apps",
@@ -238,16 +238,18 @@ def start():
 
 # ------------------------------------------------------------------ Checks aus der Dokumentation
 def area_of(dev, kind=None):
-    if kind == "http" and TYPE_AREA.get((dev or {}).get("type")) not in ("network", "storage"):
+    a = types.area((dev or {}).get("type"))
+    a = a if a in AREAS else "other"
+    if kind == "http" and a not in ("network", "storage"):
         return "apps"
-    return TYPE_AREA.get((dev or {}).get("type"), "other")
+    return a
 
 
 def plan(devices, groups):
     """Leitet aus den dokumentierten Geräten die sinnvollen Checks ab. groups: gewählte Bereiche (AREAS-Schlüssel)."""
     out = []
     for d in devices:
-        if d["type"] in PASSIVE or d["type"] == "client":
+        if d["type"] in PASSIVE or types.base(d["type"]) in ("client", "smartphone", "tablet"):
             continue
         area = TYPE_AREA.get(d["type"], "other")
         if area not in groups:

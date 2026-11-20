@@ -1,4 +1,5 @@
 """LabVis – interaktive Homelab-Dokumentation: Topologie, Racks, Netzwerke, Scanner, Anbindungen."""
+import base64
 import hashlib
 import os
 import re
@@ -11,14 +12,14 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, connectors, db, importer, ipam, monitor, scanner
+from . import auth, connectors, db, importer, ipam, monitor, scanner, types
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.21.0"
+VERSION = "0.22.0"
 
 
 def _build_id():
@@ -59,6 +60,7 @@ app.middleware("http")(auth.middleware)
 app.include_router(auth.router)
 app.include_router(monitor.router)
 app.include_router(ipam.router)
+app.include_router(types.router)
 
 
 def _scheduler():
@@ -101,6 +103,8 @@ def state(request: Request):
         "devices": db.q("SELECT * FROM devices ORDER BY id"),
         "links": db.q("SELECT * FROM links ORDER BY id"),
         "wlans": db.q("SELECT * FROM wlans ORDER BY ssid COLLATE NOCASE"),
+        "types": types.all_types(),
+        "icons": types.list_icons(),
         "navlinks": db.q("SELECT * FROM navlinks ORDER BY sort, label COLLATE NOCASE"),
         "checks": monitor.light(),
         "discoveries": db.q("SELECT * FROM discoveries ORDER BY state='ignored', last_seen DESC"),
@@ -446,6 +450,8 @@ def export():
     data = {t: db.q(f"SELECT * FROM {t}") for t in TABLES}
     data["settings"] = db.settings()
     data["checks"] = db.q("SELECT id, " + ", ".join(monitor.FIELDS) + ", source FROM checks")
+    data["types"] = db.q("SELECT * FROM types")
+    data["icons"] = {f.name: base64.b64encode(f.read_bytes()).decode() for f in sorted(types.UPLOADS.glob("*")) if f.is_file()} if types.UPLOADS.exists() else {}
     return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="labvis-export.json"'})
 
 
@@ -461,12 +467,24 @@ def restore(data: dict = Body(...)):
                 c.execute(f"INSERT INTO {t}({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                           [db._enc(row[k]) for k in cols])
         c.execute("DELETE FROM discoveries")
+        if "types" in data:                                  # ältere Exporte kennen keine eigenen Typen
+            c.execute("DELETE FROM types")
+            for row in data["types"]:
+                cols = [k for k in row if k in ("key", "label", "icon", "area", "base", "rules", "hidden", "sort")]
+                c.execute(f"INSERT INTO types({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [db._enc(row[k]) if k == "rules" else row[k] for k in cols])
         for t in ("checks", "check_results", "check_hours", "check_events"):     # Verlauf gehört zur alten Installation
             c.execute(f"DELETE FROM {t}")
         for row in data.get("checks", []):
             cols = [k for k in row if k in ("id", "source", *monitor.FIELDS)]
             c.execute(f"INSERT INTO checks({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [row[k] for k in cols])
     save_settings(data.get("settings", {}))
+    if data.get("icons"):
+        types.UPLOADS.mkdir(parents=True, exist_ok=True)
+        for fn, b64 in data["icons"].items():
+            fn = re.sub(r"[^a-z0-9.-]", "", fn.lower())
+            if re.match(r"^[a-z0-9-]+\.(svg|png|webp|jpg)$", fn):
+                (types.UPLOADS / fn).write_bytes(base64.b64decode(b64))
+    types._forget()
     return {"ok": True}
 
 
@@ -475,6 +493,9 @@ def restore(data: dict = Body(...)):
 def icon(name: str):
     name = re.sub(r"[^a-z0-9-]", "", name.lower())[:60] or "type-other"
     hdr = {"Cache-Control": "public, max-age=86400", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"}
+    up = types.serve(name, hdr)                       # eigene, hochgeladene Icons
+    if up:
+        return up
     for f in (STATIC / "icons" / f"{name}.svg", ICON_CACHE / f"{name}.svg"):
         if f.exists():
             return FileResponse(f, media_type="image/svg+xml", headers=hdr)

@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS wlans(
   id INTEGER PRIMARY KEY, ssid TEXT NOT NULL, vlan_id INTEGER, band TEXT, security TEXT, note TEXT, aps TEXT DEFAULT '[]');
 CREATE TABLE IF NOT EXISTS opn_cache(
   integration_id INTEGER PRIMARY KEY, data TEXT, fetched REAL);
+CREATE TABLE IF NOT EXISTS types(
+  key TEXT PRIMARY KEY, label TEXT, icon TEXT, area TEXT, base TEXT, rules TEXT, hidden INTEGER DEFAULT 0, sort INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS navlinks(
   id INTEGER PRIMARY KEY, grp TEXT, label TEXT NOT NULL, url TEXT NOT NULL, icon TEXT, sort INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS users(
@@ -50,7 +52,7 @@ CREATE TABLE IF NOT EXISTS sessions(
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created REAL, expires REAL, ua TEXT);
 """
 
-JSON_COLS = {"ports", "meta", "http", "snmp", "guess", "config", "aps"}
+JSON_COLS = {"ports", "meta", "http", "snmp", "guess", "config", "aps", "rules"}
 LIST_COLS = {"ports", "aps"}
 COLUMNS = {
     "vlans": ["vid", "name", "subnet", "gateway", "color", "note", "scan"],

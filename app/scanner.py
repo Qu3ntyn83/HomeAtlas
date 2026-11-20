@@ -112,6 +112,10 @@ def _enrich(h, community):
     if not h.get("hostname") and clean_name(h["snmp"].get("name")):
         h["hostname"] = h["snmp"]["name"]
     h["guess"] = identify(h)
+    from . import types
+    t = types.detect(h)                               # Erkennungsregeln der Gerätetypen (auch eigene) gehen vor
+    if t:
+        h["guess"]["type"], h["guess"]["icon"] = t, ""
     return h
 
 
