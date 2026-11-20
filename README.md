@@ -94,11 +94,17 @@ Die Seite **IPAM & DNS** verbindet die Dokumentation mit dem, was die OPNsense w
 Dnsmasq-Hosts), DHCP-Leases und -Reservierungen (Kea, Dnsmasq, lesend auch ISC DHCP) und die ARP-Tabelle. Gelesen wird beim
 Abgleich der OPNsense-Anbindung.
 
+- **Netze:** Übersicht aller Netze mit Mini-Karte, Belegung, Konflikten und nächster freier Adresse; jedes Netz ist auch als
+  Unterpunkt im Seitenmenü erreichbar. Adressen, die die Firewall kennt, die aber in keinem dokumentierten Netz liegen, erscheinen
+  als Hinweis auf ein fehlendes Netz – mit „Netz anlegen".
 - **Adressen:** je Netz eine Adresskarte – dokumentiert, nicht dokumentiert (im Netz gesehen), Gateway, Reservierung, nur DNS,
   DHCP-Bereich – mit Belegung, nächster freier Adresse außerhalb des DHCP-Bereichs und Hinweisen.
 - **Konflikte:** mehrere Geräte mit derselben Adresse, Reservierung oder ARP-Antwort mit anderer MAC als dokumentiert,
   feste Adresse im DHCP-Bereich ohne Reservierung.
-- **DNS:** jeder Eintrag mit Abgleich (passt · Adresse veraltet · kein Gerät · doppelt) und die Liste der Geräte ohne DNS-Eintrag.
+- **ARP der Firewall:** Ein Scan sieht MAC-Adressen nur im eigenen Netz. Die ARP-Tabelle der OPNsense kennt sie aus allen
+  gerouteten Netzen: LabVis ergänzt damit fehlende MACs und Hersteller an Geräten und Funden, nimmt beim Scan auch Geräte auf,
+  die auf Ping nicht antworten, und meldet Geräte, deren MAC jetzt unter einer anderen Adresse antwortet („Adresse übernehmen").
+- **DNS:** jeder Eintrag mit Abgleich, nach Netzen gruppiert (passt · Adresse veraltet · kein Gerät · doppelt) und die Liste der Geräte ohne DNS-Eintrag.
 - **Schreiben:** Mit dem Haken „Änderungen … erlauben" in der Anbindung legt LabVis DNS-Einträge an, ändert und löscht sie und
   legt DHCP-Reservierungen an (Kea oder Dnsmasq; ISC DHCP hat dafür keine Schnittstelle). Danach lädt LabVis den Dienst neu.
 

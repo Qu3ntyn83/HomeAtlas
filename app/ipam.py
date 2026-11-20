@@ -115,15 +115,91 @@ def fetch(integ, cli):
                 snap["reservations"].append({"src": "isc", "uuid": None, "ip": ip, "mac": _mac(r.get("mac")), "hostname": r.get("hostname") or "", "desc": ""})
     arp = part("ARP", lambda: cli.call("/diagnostics/interface/get_arp"))
     for r in arp if isinstance(arp, list) else (arp or {}).get("rows", []) if isinstance(arp, dict) else []:
-        if _ip(r.get("ip")) and _mac(r.get("mac")) and not r.get("permanent"):
-            snap["arp"].append({"ip": _ip(r["ip"]), "mac": _mac(r["mac"]), "hostname": (r.get("hostname") or "").strip(), "intf": r.get("intf_description") or r.get("intf") or ""})
+        if _ip(r.get("ip")) and _mac(r.get("mac")) and not r.get("permanent") and not r.get("expired"):
+            snap["arp"].append({"ip": _ip(r["ip"]), "mac": _mac(r["mac"]), "hostname": (r.get("hostname") or "").strip(),
+                                "intf": r.get("intf_description") or r.get("intf") or "", "vendor": (r.get("manufacturer") or "").strip() or vendor(r["mac"])})
     db.x("INSERT OR REPLACE INTO opn_cache(integration_id, data, fetched) VALUES(?,?,?)", (integ["id"], json.dumps(snap), db.now()))
+    learned = apply_arp()
     a = [x for x in (f"{sum(1 for d in snap['dns'] if d['rr'] in ('A', 'AAAA'))} DNS-Einträge" if snap["dns"] else "",
                      f"{len(snap['reservations'])} Reservierungen" if snap["reservations"] else "",
                      f"{len(snap['leases'])} Leases" if snap["leases"] else "", f"ARP {len(snap['arp'])}" if snap["arp"] else "") if x]
+    if learned:
+        a.append(learned)
     if snap["errors"]:
         a.append("⚠ " + "; ".join(sorted(set(snap["errors"].values())))[:160])
     return " · ".join(a)
+
+
+# ------------------------------------------------------------------ ARP der Firewall: MAC-Adressen auch aus anderen Netzen
+_OUI = None
+
+
+def vendor(mac):
+    """Hersteller aus den ersten drei Bytes der MAC (Liste von nmap); lokal verwaltete (zufällige) MACs haben keinen."""
+    global _OUI
+    mac = _mac(mac)
+    if not mac or int(mac[1], 16) & 2:
+        return ""
+    if _OUI is None:
+        _OUI = {}
+        try:
+            with open("/usr/share/nmap/nmap-mac-prefixes", encoding="utf-8", errors="replace") as f:
+                for ln in f:
+                    if len(ln) > 7 and ln[6] == " " and ln[0] != "#":
+                        _OUI[ln[:6].upper()] = ln[7:].strip()
+        except OSError:
+            pass
+    return _OUI.get(mac.replace(":", "")[:6].upper(), "")
+
+
+def arp_table():
+    """Zusammengeführte ARP-Tabellen aller OPNsense-Anbindungen: ip → Eintrag."""
+    out = {}
+    for row in db.q("SELECT data FROM opn_cache ORDER BY fetched"):
+        for a in json.loads(row["data"]).get("arp") or []:
+            out[a["ip"]] = a
+    return out
+
+
+def apply_arp():
+    """Ergänzt fehlende MAC-Adressen (und Hersteller) an Geräten, Zusatzadressen und Funden aus der ARP-Tabelle.
+    Ein Scan sieht MACs nur im eigenen Netz; die Firewall kennt sie aus allen Netzen, die sie routet."""
+    arp = arp_table()
+    if not arp:
+        return ""
+    known = {(_mac(d["mac"])) for d in db.q("SELECT mac FROM devices WHERE mac IS NOT NULL AND mac<>''")}
+    dev_n = disc_n = 0
+    devs = db.q("SELECT id, ip, mac, vendor, meta FROM devices")
+    ip_count = {}
+    for d in devs:
+        if _ip(d["ip"]):
+            ip_count[_ip(d["ip"])] = ip_count.get(_ip(d["ip"]), 0) + 1
+    for d in devs:
+        upd, meta = {}, d["meta"] or {}
+        a = arp.get(_ip(d["ip"]))
+        if a and not _mac(d["mac"]) and a["mac"] not in known and ip_count.get(_ip(d["ip"])) == 1:   # bei doppelter IP nicht raten
+            upd["mac"] = a["mac"].upper()
+            known.add(a["mac"])
+            if not d["vendor"] and a.get("vendor"):
+                upd["vendor"] = a["vendor"]
+            meta["mac_src"] = "arp"
+        changed = False
+        for x in meta.get("addrs") or []:
+            a = arp.get(_ip(x.get("ip")))
+            if a and not _mac(x.get("mac")) and a["mac"] not in known:
+                x["mac"], changed = a["mac"].upper(), True
+                known.add(a["mac"])
+        if upd or changed:
+            upd["meta"] = meta
+            db.update("devices", d["id"], upd)
+            dev_n += 1
+    for r in db.q("SELECT id, ip, mac, vendor FROM discoveries WHERE mac IS NULL OR mac=''"):
+        a = arp.get(_ip(r["ip"]))
+        if a:
+            db.x("UPDATE discoveries SET mac=?, vendor=COALESCE(NULLIF(vendor,''), ?) WHERE id=?", (a["mac"].upper(), a.get("vendor") or None, r["id"]))
+            disc_n += 1
+    parts = [f"{dev_n} Geräte" if dev_n else "", f"{disc_n} Funde" if disc_n else ""]
+    return ("MAC aus ARP ergänzt: " + ", ".join(p for p in parts if p)) if dev_n or disc_n else ""
 
 
 # ------------------------------------------------------------------ Auswerten
@@ -173,12 +249,25 @@ def build():
     pools = [(int(ipaddress.IPv4Address(p["start"])), int(ipaddress.IPv4Address(p["end"])), p["src"]) for p in snap["pools"]]
     in_pool = lambda n: any(a <= n <= b for a, b, _ in pools)   # noqa: E731
 
+    # Gerät mit bekannter MAC antwortet laut ARP unter einer anderen Adresse (DHCP hat neu vergeben, Gerät umgezogen)
+    mac_dev = {}
+    for d in devs:
+        if _mac(d["mac"]) and d["type"] not in NO_DNS:
+            mac_dev.setdefault(_mac(d["mac"]), d)
+    moved = {}
+    for ip, a in arp.items():
+        d = mac_dev.get(a["mac"])
+        if d and _ip(d["ip"]) and _ip(d["ip"]) != ip and (arp.get(_ip(d["ip"])) or {}).get("mac") != a["mac"] \
+                and not any(x["id"] == d["id"] for x in by_ip.get(ip, [])):
+            moved[ip] = {"id": d["id"], "name": d["name"], "old": _ip(d["ip"])}
+    all_nets = []
     subnets = []
     for v in db.q("SELECT id, vid, name, subnet, gateway, color FROM vlans WHERE subnet IS NOT NULL AND subnet<>'' ORDER BY vid"):
         try:
             net = ipaddress.IPv4Network(v["subnet"], strict=False)
         except ValueError:
             continue
+        all_nets.append(net)
         first, last = int(net.network_address), int(net.broadcast_address)
         gw = _ip(v["gateway"])
         cells, conflicts = {}, []
@@ -202,6 +291,10 @@ def build():
                 c["issues"].append(("pool", "Feste Adresse im DHCP-Bereich ohne Reservierung – DHCP kann sie an ein anderes Gerät vergeben"))
             if not ds and not c["gw"] and ((le and le["active"]) or a or r):
                 c["undoc"] = True
+            if ip in moved:
+                m = moved[ip]
+                c["moved"] = m
+                c["issues"].append(("moved", f"Laut ARP ist das {m['name']} – dokumentiert mit {m['old']}"))
             for k, msg in c["issues"]:
                 conflicts.append({"ip": ip, "kind": k, "text": msg})
             cells[ip] = c
@@ -220,6 +313,20 @@ def build():
                         "pools": [{"start": str(ipaddress.IPv4Address(max(a, first))), "end": str(ipaddress.IPv4Address(min(b, last))), "src": s}
                                   for a, b, s in pools if b >= first and a <= last],
                         "cells": list(cells.values()), "conflicts": conflicts})
+
+    # Adressen außerhalb aller dokumentierten Netze (Hinweis auf fehlende Netze), je /24 zusammengefasst
+    outside = {}
+    for ip in set(arp) | {le["ip"] for le in snap["leases"] if le["active"]} | set(res):
+        a4 = ipaddress.IPv4Address(ip)
+        if a4.is_loopback or a4.is_link_local or any(a4 in n for n in all_nets):
+            continue
+        key = str(ipaddress.IPv4Network(f"{ip}/24", strict=False))
+        o = outside.setdefault(key, {"subnet": key, "count": 0, "examples": [], "intf": ""})
+        o["count"] += 1
+        a = arp.get(ip) or {}
+        o["intf"] = o["intf"] or a.get("intf") or ""
+        if len(o["examples"]) < 4:
+            o["examples"].append(ip)
 
     # DNS: Einträge gegen die Dokumentation
     name_of = {}
@@ -266,7 +373,7 @@ def build():
             "fetched": snap.get("fetched"), "errors": snap["errors"], "services": svc, "write": _writable(integ),
             "dns_target": dns_target, "dhcp_target": dhcp_target, "domain": domain,
             "counts": {"dns": len(snap["dns"]), "reservations": len(snap["reservations"]), "leases": len(snap["leases"]), "arp": len(snap["arp"])},
-            "subnets": subnets, "records": records, "missing": missing}
+            "subnets": subnets, "records": records, "missing": missing, "outside": sorted(outside.values(), key=lambda o: -o["count"])}
 
 
 # ------------------------------------------------------------------ Schreiben
