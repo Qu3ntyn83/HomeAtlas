@@ -122,6 +122,16 @@ def discover(cidr, community="public"):
         raise ValueError(f"Netz {cidr} ist zu groß (max. /{32 - (MAX_HOSTS - 1).bit_length()})")
     STATE["phase"] = "Hosts suchen"
     up = _hosts(_nmap(["-sn", str(net)]))
+    # ARP der Firewall: liefert MACs auch für geroutete Netze und Geräte, die auf Ping nicht antworten
+    from . import ipam
+    arp = {ip: a for ip, a in ipam.arp_table().items() if ipaddress.ip_address(ip) in net}
+    for ip, a in arp.items():
+        h = up.setdefault(ip, {"ip": ip, "mac": None, "vendor": None, "hostname": None, "ports": []})
+        if not h.get("mac"):
+            h["mac"] = a["mac"].upper()
+            h["vendor"] = h.get("vendor") or a.get("vendor") or None
+        if not h.get("hostname") and a.get("hostname"):
+            h["hostname"] = a["hostname"]
     if up:
         STATE["phase"] = f"Ports prüfen ({len(up)} Hosts)"
         ports = _hosts(_nmap(["-Pn", "-n", "--open", "-p", ",".join(map(str, SCAN_PORTS)), "-iL", "-"],
