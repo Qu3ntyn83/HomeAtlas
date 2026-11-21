@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/logo.png" alt="HomeAtlas – Homelab &amp; Network Visualization" width="300"></p>
+
 # HomeAtlas
 
 Interaktive Homelab-Dokumentation in **einem Docker-Container**: Topologie, Racks, Netzwerke, IPAM und DNS, Internetzugang,
