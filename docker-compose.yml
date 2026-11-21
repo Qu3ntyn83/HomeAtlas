@@ -1,8 +1,8 @@
 services:
-  labvis:
+  homeatlas:
     build: .
-    image: labvis:latest
-    container_name: labvis
+    image: homeatlas:latest
+    container_name: homeatlas
     restart: unless-stopped
     # Host-Netz: nur so sieht der Scanner MAC-Adressen und Hersteller (ARP) der Geräte im eigenen Netz.
     network_mode: host
@@ -10,11 +10,11 @@ services:
       - NET_RAW
       - NET_ADMIN
     environment:
-      LABVIS_PORT: "8099"            # Weboberfläche: http://<host>:8099
-      LABVIS_USER: "admin"          # Name des ersten Kontos
-      LABVIS_PASSWORD: "${LABVIS_PASSWORD:-}"   # legt beim ersten Start das Konto an; leer = Einrichtung im Browser
+      HOMEATLAS_PORT: "8099"         # Weboberfläche: http://<host>:8099
+      HOMEATLAS_USER: "admin"       # Name des ersten Kontos
+      HOMEATLAS_PASSWORD: "${HOMEATLAS_PASSWORD:-${LABVIS_PASSWORD:-}}"   # legt beim ersten Start das Konto an; leer = Einrichtung im Browser
       TZ: "Europe/Berlin"
     volumes:
       - ./data:/data
-      # Lokaler Docker dieses Hosts für die Docker-Anbindung (LabVis liest nur). Zeile entfernen, wenn nicht gewünscht.
+      # Lokaler Docker dieses Hosts für die Docker-Anbindung (HomeAtlas liest nur). Zeile entfernen, wenn nicht gewünscht.
       - /var/run/docker.sock:/var/run/docker.sock:ro

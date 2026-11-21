@@ -1,4 +1,4 @@
-/* LabVis – Oberfläche. Kein Build-Schritt, reines JS + SVG. */
+/* HomeAtlas – Oberfläche. Kein Build-Schritt, reines JS + SVG. */
 'use strict';
 const PAL = {BG: '#0b0f15', PANEL: '#111821', CHIP: '#19222e', BORDER: '#253042', TEXT: '#e6edf3', MUTED: '#8d9aab',
   FAINT: '#5d6a7c', TRUNK: '#d5dde6', TRUNKB: '#3a475a', LINK: '#79c0ff', OK: '#3fb950', BAD: '#f85149'};
@@ -125,8 +125,10 @@ function topOf(id) {
   const u = roomUnit(id) || t;
   return roomIds.get(roomOf(u)) ?? t.id;
 }
-const roomPos = () => { try { return JSON.parse(localStorage.getItem('labvis.roompos') || '{}'); } catch (e) { return {}; } };
-const saveRoomPos = (name, x, y) => { try { const p = roomPos(); p[name] = {x, y}; localStorage.setItem('labvis.roompos', JSON.stringify(p)); } catch (e) { /* Position gilt dann nur bis zum Neuladen */ } };
+// frühere Einstellungen aus LabVis übernehmen (einmalig)
+try { for (const k of ['nav', 'navgrp', 'roompos']) if (localStorage.getItem('labvis.' + k) !== null && localStorage.getItem('homeatlas.' + k) === null) { localStorage.setItem('homeatlas.' + k, localStorage.getItem('labvis.' + k)); localStorage.removeItem('labvis.' + k); } } catch (e) { /* ohne Speicher nichts zu übernehmen */ }
+const roomPos = () => { try { return JSON.parse(localStorage.getItem('homeatlas.roompos') || '{}'); } catch (e) { return {}; } };
+const saveRoomPos = (name, x, y) => { try { const p = roomPos(); p[name] = {x, y}; localStorage.setItem('homeatlas.roompos', JSON.stringify(p)); } catch (e) { /* Position gilt dann nur bis zum Neuladen */ } };
 function ago(t) {
   if (!t) return 'nie';
   const s = S.now - t;
@@ -146,12 +148,12 @@ async function load(silent) {
   if (S.types) { TYPEDEF = Object.fromEntries(S.types.map(t => [t.key, t])); TYPES = Object.fromEntries(S.types.map(t => [t.key, t.label])); }
   if (load.build && S.build !== load.build && panelMode !== 'form') { location.reload(); return; }
   load.build = S.build;
-  $('#title').textContent = S.settings.title || 'LabVis';
+  $('#title').textContent = S.settings.title || 'HomeAtlas';
   renderNavLinks();
   $('#who').textContent = S.user; $('#whorole').textContent = {read: 'Lesen', write: 'Ändern', admin: 'Admin'}[S.role] || '';
   if (!$('#crumb').textContent) $('#crumb').textContent = 'Topologie';
   document.body.classList.toggle('ro', S.role === 'read');
-  document.title = S.settings.title && S.settings.title !== 'LabVis' ? S.settings.title + ' · LabVis' : 'LabVis';
+  document.title = S.settings.title && S.settings.title !== 'HomeAtlas' ? S.settings.title + ' · HomeAtlas' : 'HomeAtlas';
   $('#badge').textContent = S.discoveries.filter(d => d.state === 'pending').length || '';
   $('#mbadge').textContent = S.checks.filter(isProblem).length || '';
   $('#scanstate').textContent = S.scanner.running ? `Scan ${S.scanner.running} · ${S.scanner.phase}` : '';
@@ -166,7 +168,7 @@ function render() {
   ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, ipam: renderIpam, types: renderTypes, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
 }
 // Seitenmenü: am Desktop ein-/ausklappbar (gemerkt), am Handy als Schublade
-const navStore = v => { try { if (v === undefined) return localStorage.getItem('labvis.nav'); localStorage.setItem('labvis.nav', v); } catch (e) { /* ohne Speicher gilt die Wahl bis zum Neuladen */ } return null; };
+const navStore = v => { try { if (v === undefined) return localStorage.getItem('homeatlas.nav'); localStorage.setItem('homeatlas.nav', v); } catch (e) { /* ohne Speicher gilt die Wahl bis zum Neuladen */ } return null; };
 const navDrawer = open => { document.body.classList.toggle('nav-open', open); $('#shade').hidden = !open; };
 function navMin(min) {
   document.body.classList.toggle('nav-min', min);
@@ -1146,7 +1148,7 @@ function monRow(c) {
 function monBody() {
   if (!MON) return '<div class="hint">lädt …</div>';
   const all = MON.checks, on = all.filter(c => c.enabled), down = on.filter(isProblem), never = on.filter(isNever), wait = on.filter(c => c.status === 'unknown');
-  if (!all.length) return `<div class="hint"><b>Noch keine Überwachung.</b><br>LabVis kann aus der Dokumentation Checks ableiten: einen Ping je Gerät mit IP, ` +
+  if (!all.length) return `<div class="hint"><b>Noch keine Überwachung.</b><br>HomeAtlas kann aus der Dokumentation Checks ableiten: einen Ping je Gerät mit IP, ` +
     `einen Port-Check je bekanntem Dienst (SSH, Proxmox, SMB …) und einen HTTP-Check je Weboberfläche.` +
     `<div class="acts"><button class="btn pri" data-act="genChecks">Aus Dokumentation erzeugen</button><button class="btn" data-act="newCheck">+ Check von Hand</button></div></div>`;
   const f = c => match(monQ, c.device, c.name, c.target, c.port, KINDS_CHECK[c.kind], MON.areas[c.area], c.status === 'down' ? 'ausgefallen problem' : '');
@@ -1259,7 +1261,7 @@ function integForm(i) {
     const c = cands.find(x => x.v === pick.value), f = n => $(`[name=${n}]`, panel);
     if (!c) return;
     if (f('c_host')) f('c_host').value = i.kind === 'homeassistant' ? `http://${c.ip}:8123` : c.ip;
-    if (f('c_url')) f('c_url').value = isLocal(c.ip) ? '' : `http://${c.ip}:2375`;   // LabVis-Host selbst: über den Docker-Socket
+    if (f('c_url')) f('c_url').value = isLocal(c.ip) ? '' : `http://${c.ip}:2375`;   // HomeAtlas-Host selbst: über den Docker-Socket
     if (!f('name').value || f('name').dataset.auto) { f('name').value = c.name; f('name').dataset.auto = '1'; }
     f('device_id').value = c.v.startsWith('d:') ? c.v.slice(2) : '';
   });
@@ -1297,7 +1299,7 @@ function renderSystem() {
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
     `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>`;
   else if (S.role === 'write') h += `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>`;
-  main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks<br><span class="mono">LabVis ${esc(S.version)} · Build ${esc(S.build)}</span></p></div>`;
+  main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks<br><span class="mono">HomeAtlas ${esc(S.version)} · Build ${esc(S.build)}</span></p></div>`;
   $('#pwf').addEventListener('submit', async e => {
     e.preventDefault();
     try { await api('POST', '/api/auth/password', vals(e.target)); e.target.reset(); toast('Passwort geändert – andere Sitzungen wurden abgemeldet'); }
@@ -1338,7 +1340,7 @@ const ACT = {
   ipamPickAll: (d, el) => { if (el.checked) main.querySelectorAll('[data-act=ipamPick]').forEach(n => ipamPick.add(+n.dataset.id)); else ipamPick.clear(); renderIpam(true); },
   ipamDomSave: () => { const v = (ipamNames._dom ?? IPAM.domain).trim(); api('POST', '/api/settings/save', {dns_domain: v}).then(() => { IPAM.domain = v; toast('Domain gespeichert'); }, er => toast(er.message, true)); },
   ipamDnsAdd: () => {
-    const dom = (ipamNames._dom ?? IPAM.domain).trim(), items = IPAM.missing.filter(m => ipamPick.has(m.id)).map(m => ({hostname: ipamSlug(ipamNames[m.id] ?? m.suggest), domain: dom, ip: m.ip, description: 'LabVis: ' + m.name}));
+    const dom = (ipamNames._dom ?? IPAM.domain).trim(), items = IPAM.missing.filter(m => ipamPick.has(m.id)).map(m => ({hostname: ipamSlug(ipamNames[m.id] ?? m.suggest), domain: dom, ip: m.ip, description: 'HomeAtlas: ' + m.name}));
     if (!items.length) return;
     if (!confirm(`${items.length} DNS-Einträge in ${SRC[IPAM.dns_target]} anlegen?\n\n` + items.slice(0, 12).map(i => `${i.hostname}${dom ? '.' + dom : ''} → ${i.ip}`).join('\n') + (items.length > 12 ? '\n…' : ''))) return;
     ipamWrite('/api/ipam/dns', {op: 'add', items}, `${items.length} DNS-Einträge angelegt`).then(ok => { if (ok) ipamPick.clear(); });
@@ -1348,14 +1350,14 @@ const ACT = {
   ipamDnsOne: d => {
     const [, c] = ipamCell(d.ip), back = () => ipamCellPanel(d.ip);
     openForm('DNS-Eintrag für ' + esc(d.ip), [[['hostname', 'Hostname'], ['domain', 'Domain']], ['description', 'Beschreibung']],
-      {hostname: ipamSlug(ipamDevName(d.ip, c)), domain: ipamNames._dom ?? IPAM.domain, description: 'LabVis'},
+      {hostname: ipamSlug(ipamDevName(d.ip, c)), domain: ipamNames._dom ?? IPAM.domain, description: 'HomeAtlas'},
       async data => { if (await ipamWrite('/api/ipam/dns', {op: 'add', items: [{...data, ip: d.ip}]}, 'DNS-Eintrag angelegt')) setTimeout(back, 0); else throw new Error('nicht angelegt'); });
     ipamBack = back;
   },
   ipamResAdd: d => {
     const [, c] = ipamCell(d.ip), back = () => ipamCellPanel(d.ip);
     openForm('DHCP-Reservierung für ' + esc(d.ip), [['mac', 'MAC-Adresse'], ['hostname', 'Hostname'], ['description', 'Beschreibung']],
-      {mac: d.mac, hostname: ipamSlug(ipamDevName(d.ip, c)), description: 'LabVis'},
+      {mac: d.mac, hostname: ipamSlug(ipamDevName(d.ip, c)), description: 'HomeAtlas'},
       async data => { if (await ipamWrite('/api/ipam/dhcp', {op: 'add', ip: d.ip, ...data, domain: ipamNames._dom ?? IPAM.domain}, `Reservierung in ${SRC[IPAM.dhcp_target]} angelegt`)) setTimeout(back, 0); else throw new Error('nicht angelegt'); },
       `<div class="hint" style="margin-top:12px;font-size:12.5px">Wird in ${SRC[IPAM.dhcp_target]} angelegt. Das Gerät bekommt die Adresse beim nächsten Erneuern seiner Lease.</div>`);
     ipamBack = back;
@@ -1391,7 +1393,7 @@ const ACT = {
   fit: fitView,
   relayout: () => {
     if (!confirm('Alle Karten neu anordnen? Deine Positionen gehen verloren.')) return;
-    if (viewMode === 'rooms') { try { localStorage.removeItem('labvis.roompos'); } catch (e) { /* egal */ } } else for (const c of cards.values()) { c.x = null; c.d.x = null; }
+    if (viewMode === 'rooms') { try { localStorage.removeItem('homeatlas.roompos'); } catch (e) { /* egal */ } } else for (const c of cards.values()) { c.x = null; c.d.x = null; }
     renderTopo(); fitView();
   },
   viewMode: d => { viewMode = d.m; closePanel(); renderTopo(); fitView(); },
@@ -1435,7 +1437,7 @@ const ACT = {
     const lines = [['Status', 'IP', 'Gerät', 'Hostname', 'Typ', 'Raum', 'MAC', 'Hersteller', 'VLAN', 'Netzwerk'].map(q).join(';'),
       ...netFiltered().map(r => { const v = vlan(r.vlan_id) || {}; return [STATUS[r.status], r.ip, r.name, r.hostname, r.type, r.room || '', r.mac, r.vendor, v.vid ?? '', v.name || ''].map(q).join(';'); })];
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], {type: 'text/csv'})); a.download = 'labvis-adressen.csv'; a.click();
+    a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], {type: 'text/csv'})); a.download = 'homeatlas-adressen.csv'; a.click();
   },
   jump: d => {
     const x = dev(+d.id), c = cards.get(topOf(x.id)); if (!c) return;
@@ -1543,7 +1545,7 @@ const ACT = {
   newInteg: d => {
     const x = d.dev ? dev(+d.dev) : null, s = x && d.sug != null ? x.meta.suggestions[+d.sug] : null;
     const cfg = s ? {...s.config} : {};
-    if (d.kind === 'docker' && x && isLocal(x.ip)) cfg.url = '';   // der Host, auf dem LabVis läuft: Socket statt Netzwerk-API
+    if (d.kind === 'docker' && x && isLocal(x.ip)) cfg.url = '';   // der Host, auf dem HomeAtlas läuft: Socket statt Netzwerk-API
     integForm({kind: d.kind, device_id: x ? x.id : '', name: x ? x.name : '', config: cfg});
   },
   editInteg: d => integForm(S.integrations.find(i => i.id === +d.id)),
@@ -1914,7 +1916,7 @@ function ipamOverviewHtml(I) {
   }).join('') + '</div>';
   if (I.outside.length) {
     h += `<h3 class="imh">Adressen außerhalb der dokumentierten Netze</h3><p class="muted" style="margin:-4px 0 10px;font-size:12.5px">Die Firewall kennt Geräte in diesen Bereichen, ` +
-      'in LabVis gibt es dafür aber kein Netz mit Subnetz. Meist ein vergessenes VLAN.</p><div class="iissues">' + I.outside.map(o =>
+      'in HomeAtlas gibt es dafür aber kein Netz mit Subnetz. Meist ein vergessenes VLAN.</p><div class="iissues">' + I.outside.map(o =>
         `<div class="iss"><a class="mono">${esc(o.subnet)}</a><span>${o.count} ${o.count === 1 ? 'Adresse' : 'Adressen'}${o.intf ? ' · Schnittstelle ' + esc(o.intf) : ''} · z. B. ${o.examples.map(esc).join(', ')}</span>` +
         (ro() ? '' : `<button class="btn sm" data-act="ipamNewNet" data-net="${esc(o.subnet)}" data-intf="${esc(o.intf || '')}">Netz anlegen</button>`) + '</div>').join('') + '</div>';
   }
@@ -1993,7 +1995,7 @@ main.addEventListener('input', e => {
 });
 // ---------- eigene Links im Seitenmenü: mit oder ohne Kategorie, Kategorien einklappbar (je Browser gemerkt)
 const NAV_LINK_ICO = '<svg class="ni" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.700 0l3-3a4 4 0 0 0-5.700-5.700l-1 1M14 10a4 4 0 0 0-5.700 0l-3 3a4 4 0 0 0 5.700 5.700l1-1"/></svg>';
-const navClosed = v => { try { if (v === undefined) return JSON.parse(localStorage.getItem('labvis.navgrp') || '[]'); localStorage.setItem('labvis.navgrp', JSON.stringify(v)); } catch (e) { /* ohne Speicher bleibt alles offen */ } return []; };
+const navClosed = v => { try { if (v === undefined) return JSON.parse(localStorage.getItem('homeatlas.navgrp') || '[]'); localStorage.setItem('homeatlas.navgrp', JSON.stringify(v)); } catch (e) { /* ohne Speicher bleibt alles offen */ } return []; };
 const navGroups = () => { const g = new Map(); for (const l of S.navlinks || []) { const k = l.grp || ''; if (!g.has(k)) g.set(k, []); g.get(k).push(l); } return [...g.entries()].sort((a, b) => (a[0] === '') - (b[0] === '') || a[0].localeCompare(b[0])); };
 function renderNavLinks() {
   const closed = navClosed(), link = l => `<a href="${esc(l.url)}" target="_blank" rel="noopener noreferrer" title="${esc(l.label)} – ${esc(l.url)}">` +

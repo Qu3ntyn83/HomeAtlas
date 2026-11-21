@@ -1,12 +1,24 @@
-"""SQLite-Speicher für LabVis. Eine Verbindung pro Aufruf, WAL-Modus."""
+"""SQLite-Speicher für HomeAtlas. Eine Verbindung pro Aufruf, WAL-Modus."""
 import json
 import os
 import sqlite3
 import time
 from pathlib import Path
 
-DATA = Path(os.environ.get("LABVIS_DATA", "/data"))
-DB = DATA / "labvis.db"
+
+
+def env(key, default=""):
+    """Umgebungsvariable HOMEATLAS_<key>; das frühere LABVIS_<key> gilt weiter."""
+    return os.environ.get("HOMEATLAS_" + key) or os.environ.get("LABVIS_" + key) or default
+
+
+DATA = Path(env("DATA", "/data"))
+DB = DATA / "homeatlas.db"
+_OLD = DATA / "labvis.db"
+if not DB.exists() and _OLD.exists():                 # Umbenennung HomeAtlas → HomeAtlas: Datenbank übernehmen
+    for ext in ("", "-wal", "-shm"):
+        if Path(str(_OLD) + ext).exists():
+            Path(str(_OLD) + ext).rename(str(DB) + ext)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS vlans(
@@ -66,7 +78,7 @@ COLUMNS = {
     "integrations": ["kind", "name", "device_id", "config", "enabled"],
 }
 DEFAULTS = {"scan_interval_min": "60", "sync_interval_min": "15", "snmp_community": "public",
-            "title": "LabVis", "notify_url": "", "dns_domain": ""}
+            "title": "HomeAtlas", "notify_url": "", "dns_domain": ""}
 
 
 def conn():
@@ -90,6 +102,7 @@ def init():
             c.execute("ALTER TABLE devices ADD COLUMN memo_show INTEGER DEFAULT 0")
         if 'role' not in [r[1] for r in c.execute("PRAGMA table_info(users)")]:
             c.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'")
+        c.execute("UPDATE settings SET value='HomeAtlas' WHERE key='title' AND value='LabVis'")   # alter Standardtitel
         for k, v in DEFAULTS.items():
             c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)", (k, v))
 

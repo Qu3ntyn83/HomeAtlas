@@ -65,7 +65,7 @@ def _hosts(root):
 def http_probe(ip, port):
     schemes = ["https", "http"] if port in TLS_PORTS else ["http", "https"]
     for sch in schemes:
-        req = urllib.request.Request(f"{sch}://{ip}:{port}/", headers={"User-Agent": "LabVis-Scanner"})
+        req = urllib.request.Request(f"{sch}://{ip}:{port}/", headers={"User-Agent": "HomeAtlas-Scanner"})
         try:
             try:
                 resp = urllib.request.urlopen(req, timeout=3, context=_CTX)

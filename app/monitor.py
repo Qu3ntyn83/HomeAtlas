@@ -1,7 +1,7 @@
 """Überwachung: aus der Dokumentation erzeugte Checks (Ping, TCP-Port, HTTP), Verlauf, Probleme, Benachrichtigung.
 
 Aufbau der Übersicht nach dem Vorbild von Overlook (github.com/bnlqn/overlook): was ist kaputt, wie geht es jedem
-Bereich, was ist diese Woche passiert. Anders als Overlook führt LabVis die Checks selbst aus.
+Bereich, was ist diese Woche passiert. Anders als Overlook führt HomeAtlas die Checks selbst aus.
 """
 import os
 import socket
@@ -71,7 +71,7 @@ def ping(host, timeout=2.0):
     addr = socket.gethostbyname(host)
     _seq[0] = (_seq[0] + 1) % 65000
     ident, seq = os.getpid() & 0xFFFF, _seq[0]
-    payload = struct.pack("!d", time.time()) + b"labvis-ping-0123"
+    payload = struct.pack("!d", time.time()) + b"homeatlas-ping-01"
     head = struct.pack("!BBHHH", 8, 0, 0, ident, seq)
     packet = struct.pack("!BBHHH", 8, 0, _checksum(head + payload), ident, seq) + payload
     last = None
@@ -106,7 +106,7 @@ def run_check(c):
         if c["kind"] == "tcp":
             socket.create_connection((c["target"], int(c["port"])), timeout=4).close()
         elif c["kind"] == "http":
-            req = urllib.request.Request(c["target"], headers={"User-Agent": "LabVis-Monitor"})
+            req = urllib.request.Request(c["target"], headers={"User-Agent": "HomeAtlas-Monitor"})
             try:
                 _OPENER.open(req, timeout=8).close()
             except urllib.error.HTTPError as e:      # 401/403/404: der Dienst antwortet, also läuft er
@@ -151,7 +151,7 @@ def flush(force=False):
             return
         lines = [t for _, t in _outbox]
         _outbox.clear()
-    notify(lines[0] if len(lines) == 1 else f"LabVis: {len(lines)} Meldungen\n" + "\n".join(lines[:15]) +
+    notify(lines[0] if len(lines) == 1 else f"HomeAtlas: {len(lines)} Meldungen\n" + "\n".join(lines[:15]) +
            (f"\n… und {len(lines) - 15} weitere" if len(lines) > 15 else ""))
 
 
@@ -162,7 +162,7 @@ def notify(text):
         return
     try:
         req = urllib.request.Request(url, data=text.encode(), method="POST",
-                                     headers={"Content-Type": "text/plain; charset=utf-8", "Title": "LabVis"})
+                                     headers={"Content-Type": "text/plain; charset=utf-8", "Title": "HomeAtlas"})
         urllib.request.urlopen(req, timeout=8).close()
     except Exception as e:  # noqa: BLE001
         print("notify:", e, flush=True)
@@ -412,7 +412,7 @@ def remove_never():
 def test_notify():
     if not (db.setting("notify_url") or "").strip():
         raise HTTPException(400, "Keine Adresse für Benachrichtigungen hinterlegt")
-    notify("🔔 LabVis: Testmeldung – Benachrichtigungen funktionieren")
+    notify("🔔 HomeAtlas: Testmeldung – Benachrichtigungen funktionieren")
     return {"ok": True}
 
 
@@ -421,7 +421,7 @@ def gatus():
     """Die Checks als Gatus-Konfiguration – für alle, die Gatus als Prüfmaschine (und Overlook als Übersicht) nutzen."""
     devs = {d["id"]: d for d in db.q("SELECT id, name, type FROM devices")}
     q = lambda s: '"' + str(s).replace("\\", "\\\\").replace('"', '\\"') + '"'   # noqa: E731
-    out = ["# Erzeugt von LabVis aus der Dokumentation", "endpoints:"]
+    out = ["# Erzeugt von HomeAtlas aus der Dokumentation", "endpoints:"]
     for c in db.q("SELECT * FROM checks WHERE enabled=1 ORDER BY device_id, id"):
         d = devs.get(c["device_id"])
         url = {"ping": f"icmp://{c['target']}", "tcp": f"tcp://{c['target']}:{c['port']}", "http": c["target"]}[c["kind"]]

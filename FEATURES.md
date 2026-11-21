@@ -1,6 +1,6 @@
-# LabVis – Funktionen
+# HomeAtlas – Funktionen
 
-Vollständige Übersicht, was LabVis kann. Einrichtung und Betrieb stehen in der [README](README.md).
+Vollständige Übersicht, was HomeAtlas kann. Einrichtung und Betrieb stehen in der [README](README.md).
 
 **Inhalt:** [Oberfläche](#oberfläche) · [Topologie](#topologie) · [Verbindungsarten](#verbindungsarten) · [Geräte](#geräte) ·
 [Gerätetypen & Icons](#gerätetypen--icons) · [Racks](#racks) · [Netzwerke & WLAN](#netzwerke--wlan) · [IPAM & DNS](#ipam--dns) ·
@@ -16,7 +16,7 @@ Vollständige Übersicht, was LabVis kann. Einrichtung und Betrieb stehen in der
 - Unterpunkte je Netz unter *IPAM & DNS*
 - **Auswahlfelder mit Suche** in allen Formularen ab 8 Einträgen: Tippen grenzt ein (ohne Groß-/Kleinschreibung und Akzente), Pfeiltasten, Enter, Escape;
   Mehrfachauswahlen mit Filterfeld und Zähler
-- Eigenes Logo, Favicon und App-Symbol; „Zum Startbildschirm hinzufügen“ legt LabVis wie eine App ab
+- Eigenes Logo, Favicon und App-Symbol; „Zum Startbildschirm hinzufügen“ legt HomeAtlas wie eine App ab
 - Aktualisiert sich alle 15 Sekunden; lädt sich nach einem Update von selbst neu
 - Version und Build auf der Anmeldeseite und unter *System*
 

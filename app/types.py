@@ -2,7 +2,7 @@
 
 Die eingebauten Typen stehen hier; Anpassungen (Bezeichnung, Icon, Bereich, Erkennung, ausblenden) und eigene Typen liegen in der
 Tabelle types. Ein eigener Typ verhält sich wie ein eingebauter (base) – das bestimmt z. B., ob er ins Rack passt oder als Client gilt.
-Hochgeladene Icons liegen unter DATA/uploads/icons und heißen in LabVis „up-<name>“.
+Hochgeladene Icons liegen unter DATA/uploads/icons und heißen in HomeAtlas „up-<name>“.
 """
 import base64
 import json

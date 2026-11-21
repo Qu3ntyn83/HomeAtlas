@@ -1,4 +1,4 @@
-# LabVis
+# HomeAtlas
 
 Interaktive Homelab-Dokumentation in **einem Docker-Container**: Topologie, Racks, Netzwerke, IPAM und DNS, Internetzugang,
 Smarthome-Vernetzung und Überwachung – gefüllt von einem Netzwerk-Scan und von Anbindungen an Proxmox, Docker, OPNsense,
@@ -41,7 +41,7 @@ Die vollständige Liste steht in **[FEATURES.md](FEATURES.md)**.
 ## Start
 
 ```bash
-git clone https://github.com/Qu3ntyn83/LabVis.git labvis && cd labvis
+git clone https://github.com/Qu3ntyn83/HomeAtlas.git homeatlas && cd homeatlas
 cp .env.example .env        # Passwort für das erste Konto setzen
 docker compose up -d --build
 ```
@@ -52,9 +52,9 @@ Danach `http://<host>:8099` öffnen. Alle Daten liegen in `./data`.
 
 | Einstellung | Wo | Bedeutung |
 |---|---|---|
-| `LABVIS_PASSWORD` | `.env` | legt beim ersten Start das erste Konto an; leer = Einrichtung im Browser |
-| `LABVIS_USER` | `docker-compose.yml` | Name des ersten Kontos (Standard `admin`) |
-| `LABVIS_PORT` | `docker-compose.yml` | Port der Weboberfläche (Standard `8099`) |
+| `HOMEATLAS_PASSWORD` | `.env` | legt beim ersten Start das erste Konto an; leer = Einrichtung im Browser |
+| `HOMEATLAS_USER` | `docker-compose.yml` | Name des ersten Kontos (Standard `admin`) |
+| `HOMEATLAS_PORT` | `docker-compose.yml` | Port der Weboberfläche (Standard `8099`) |
 | `TZ` | `docker-compose.yml` | Zeitzone |
 | `./data:/data` | Volume | Datenbank, Icon-Zwischenspeicher, hochgeladene Icons |
 | `/var/run/docker.sock` | Volume (`:ro`) | lokaler Docker für die Docker-Anbindung; Zeile entfernen, wenn nicht gewünscht |
@@ -62,7 +62,7 @@ Danach `http://<host>:8099` öffnen. Alle Daten liegen in `./data`.
 Scan-Takt, Abgleich der Anbindungen, SNMP-Community, Titel und Benachrichtigungs-Adresse stehen unter *System*.
 
 Der Container läuft im **Host-Netz** mit `NET_RAW`/`NET_ADMIN`: Nur so liefert der Scan MAC-Adressen im eigenen Netz und Ping funktioniert.
-Für andere VLANs muss die Firewall den Zugriff vom LabVis-Host erlauben; MAC-Adressen kommen dort aus der ARP-Tabelle der OPNsense.
+Für andere VLANs muss die Firewall den Zugriff vom HomeAtlas-Host erlauben; MAC-Adressen kommen dort aus der ARP-Tabelle der OPNsense.
 
 ## Aktualisieren
 
@@ -75,7 +75,7 @@ Die Version steht auch auf der Anmeldeseite und unter *System*. Eine offene Seit
 
 ## Anmeldung und Rechte
 
-- **Erstes Konto:** über `LABVIS_PASSWORD`, sonst fragt die Seite beim ersten Aufruf nach Benutzername und Passwort – dann direkt
+- **Erstes Konto:** über `HOMEATLAS_PASSWORD` (das frühere `LABVIS_PASSWORD` gilt weiter), sonst fragt die Seite beim ersten Aufruf nach Benutzername und Passwort – dann direkt
   nach dem Start einrichten, bis dahin könnte es jeder im Netz tun. Die Variablen wirken nur, solange es kein Konto gibt.
 - Weitere Benutzer legt ein Admin unter *System → Benutzerverwaltung* an:
 
@@ -87,7 +87,7 @@ Die Version steht auch auf der Anmeldeseite und unter *System*. Eine offene Seit
 
 - Passwörter als scrypt-Hash, Sitzungen als HttpOnly-Cookie (30 Tage); ein Passwortwechsel meldet die anderen Sitzungen ab;
   nach fünf Fehlversuchen ist die Anmeldung von dieser Adresse kurz gesperrt.
-- **Passwort vergessen:** `docker compose exec labvis python -c "from app import db; db.x('DELETE FROM sessions'); db.x('DELETE FROM users')"`
+- **Passwort vergessen:** `docker compose exec homeatlas python -c "from app import db; db.x('DELETE FROM sessions'); db.x('DELETE FROM users')"`
   löscht alle Konten; danach greift wieder die Ersteinrichtung.
 
 ## Anbindungen einrichten
@@ -98,20 +98,20 @@ Der Scan schlägt die passende Anbindung auch selbst vor.
 **Proxmox** – read-only Token:
 
 ```bash
-pveum user add labvis@pve
-pveum aclmod / -user labvis@pve -role PVEAuditor
-pveum user token add labvis@pve labvis --privsep 0
+pveum user add homeatlas@pve
+pveum aclmod / -user homeatlas@pve -role PVEAuditor
+pveum user token add homeatlas@pve homeatlas --privsep 0
 ```
 
-Token-ID `labvis@pve!labvis` und das Secret eintragen. Wichtig ist `--privsep 0`: Ein Token mit „Privilege Separation" (Standard in der
+Token-ID `homeatlas@pve!homeatlas` und das Secret eintragen. Wichtig ist `--privsep 0`: Ein Token mit „Privilege Separation" (Standard in der
 Weboberfläche) erbt die Rechte des Benutzers nicht und sieht dann keine Gäste. Für einen solchen Token die Rolle direkt vergeben:
-`pveum aclmod / -token 'labvis@pve!labvis' -role PVEAuditor` – LabVis erkennt den Fall und meldet ihn. Gelesen werden Nodes (CPU, RAM, Version), VMs und
+`pveum aclmod / -token 'homeatlas@pve!homeatlas' -role PVEAuditor` – HomeAtlas erkennt den Fall und meldet ihn. Gelesen werden Nodes (CPU, RAM, Version), VMs und
 LXC-Container samt IP (bei VMs nur mit QEMU-Guest-Agent). Bereits gescannte Hosts mit gleicher IP oder
 gleichem Namen werden übernommen statt doppelt angelegt.
 
-**Docker** – für den Host, auf dem LabVis selbst läuft: Anbindung „Docker" anlegen und die API-URL **leer lassen**. LabVis liest dann über
+**Docker** – für den Host, auf dem HomeAtlas selbst läuft: Anbindung „Docker" anlegen und die API-URL **leer lassen**. HomeAtlas liest dann über
 den Docker-Socket, der in der `docker-compose.yml` eingebunden ist (`/var/run/docker.sock`). Das funktioniert neben Dockhand oder Portainer,
-die denselben Socket nutzen. LabVis liest nur; wer den Socket nicht einbinden will, entfernt die Zeile und nutzt auch lokal einen Socket-Proxy.
+die denselben Socket nutzen. HomeAtlas liest nur; wer den Socket nicht einbinden will, entfernt die Zeile und nutzt auch lokal einen Socket-Proxy.
 
 Für alle anderen Docker-Hosts einen read-only Socket-Proxy starten und `http://<host>:2375` eintragen:
 
@@ -131,22 +131,22 @@ Stimmt ein Nachbarname mit einem dokumentierten Gerät überein, entsteht daraus
 **OPNsense** – API-Key und Secret (System → Zugang → Benutzer → API-Schlüssel), Adresse und Port der Weboberfläche (80 = ohne TLS).
 Der API-Benutzer braucht Leserechte auf Schnittstellen/VLANs, Unbound bzw. Dnsmasq, Kea, ARP-Tabelle und Gateways. Gelesen werden VLANs
 und Subnetze sowie alles für *IPAM & DNS* und *Internetzugang*. Mit dem Haken „Änderungen an DNS-Einträgen und DHCP-Reservierungen
-erlauben“ (und Schreibrechten des API-Benutzers) kann LabVis DNS-Einträge und Reservierungen anlegen, ändern und löschen.
+erlauben“ (und Schreibrechten des API-Benutzers) kann HomeAtlas DNS-Einträge und Reservierungen anlegen, ändern und löschen.
 Ohne TLS gehen API-Schlüssel unverschlüsselt durchs Netz – für den Schreibzugriff die Weboberfläche besser auf HTTPS umstellen.
 
 **Home Assistant** – URL (`http://<ha>:8123`) und ein langlebiges Zugriffstoken (HA: Profil → Sicherheit). Der erste Abruf zeigt nur,
 welche Integrationen wie viele Geräte haben. Unter *Bearbeiten* wählst du aus, welche übernommen werden (z. B. `hue`, `tplink`,
 `smartthings`, `roborock`). Danach gilt:
 
-- Geräte mit einer MAC, die LabVis schon kennt, werden nicht doppelt angelegt, sondern um Name, Typ, Hersteller, Modell und Raum ergänzt.
-- Kennt der Scan ein Gerät nur mit IP (anderes VLAN, daher keine MAC), ordnet LabVis es über die Netzwerk-Tracker in HA zu
+- Geräte mit einer MAC, die HomeAtlas schon kennt, werden nicht doppelt angelegt, sondern um Name, Typ, Hersteller, Modell und Raum ergänzt.
+- Kennt der Scan ein Gerät nur mit IP (anderes VLAN, daher keine MAC), ordnet HomeAtlas es über die Netzwerk-Tracker in HA zu
   (UniFi, FRITZ!Box: MAC ↔ IP) und trägt die MAC nach. Schon doppelt angelegte Geräte werden dabei wieder zusammengeführt.
 - Geräte hinter einer Bridge (z. B. Hue-Lampen) erscheinen als Chips in der Karte der Bridge; ab drei Geräten ohne Bridge entsteht ein Bereich je Integration.
 - HA-Bereiche werden zu Räumen, „unavailable" zu offline. Reine Anwesenheits-Tracker werden nie als Gerät angelegt.
 - Die Platzierung passiert nur beim ersten Mal; verschiebst du ein Gerät, bleibt das so.
 
 **QNAP** und **Synology** – QTS bzw. DSM kennen keine API-Schlüssel. Am NAS einen eigenen Benutzer in der Gruppe *administrators*
-anlegen, ohne zweistufige Anmeldung, mit langem Zufallspasswort und ohne Zugriff auf Freigaben. LabVis meldet sich an, liest Modell,
+anlegen, ohne zweistufige Anmeldung, mit langem Zufallspasswort und ohne Zugriff auf Freigaben. HomeAtlas meldet sich an, liest Modell,
 Firmware, Netzwerkkarten, Platten und Volumes und meldet sich wieder ab. Ports: QNAP 443 (8080 ohne TLS), Synology 5001 (5000 ohne TLS).
 
 **IPMI / Redfish** (Supermicro, iDRAC, iLO) – Adresse des BMC und ein Benutzer (Operator oder ReadOnly). Unter „Gehört zu Gerät“ den Server
@@ -169,9 +169,9 @@ Für eine vollständige Sicherung genügt auch eine Kopie von `./data` bei gesto
 
 ## Sicherheit und Grenzen
 
-- Zugangsdaten der Anbindungen liegen unverschlüsselt in `data/labvis.db` und im Export – beides entsprechend schützen.
+- Zugangsdaten der Anbindungen liegen unverschlüsselt in `data/homeatlas.db` und im Export – beides entsprechend schützen.
 - Für Zugriff von außen gehört ein Reverse Proxy mit TLS davor; das Sitzungs-Cookie wird dann nur noch über HTTPS gesendet.
-- Der eingebundene Docker-Socket entspricht Root-Rechten auf dem Host, auch schreibgeschützt; LabVis sendet nur lesende Abfragen.
+- Der eingebundene Docker-Socket entspricht Root-Rechten auf dem Host, auch schreibgeschützt; HomeAtlas sendet nur lesende Abfragen.
 - Hochgeladene SVG-Icons werden bereinigt und mit strenger Content-Security-Policy ausgeliefert.
 - Getestet gegen nachgebaute Dienste und im Browser. **Nicht** an echten Geräten getestet: SNMP an realen Switches, OPNsense (inkl. IPAM,
   Gateways, Schreibzugriff), QNAP, Synology, IPMI/Redfish und der Home-Assistant-Import mit echten Bridges. API-Pfade können je Version abweichen;

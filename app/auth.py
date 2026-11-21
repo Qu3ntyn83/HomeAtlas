@@ -16,7 +16,8 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 from . import db
 
-COOKIE = "labvis_session"
+COOKIE = "homeatlas_session"
+OLD_COOKIE = "labvis_session"          # vor der Umbenennung; wird beim nächsten Anmelden ersetzt
 TTL = 30 * 86400
 MIN_LEN = 10
 PUBLIC = {"/healthz", "/login", "/api/auth/status", "/api/auth/login", "/api/auth/setup"}
@@ -53,16 +54,16 @@ def has_users():
 
 
 def bootstrap():
-    """Erstes Konto aus der Umgebung anlegen (LABVIS_USER / LABVIS_PASSWORD), falls noch keines existiert."""
-    pw = os.environ.get("LABVIS_PASSWORD", "")
+    """Erstes Konto aus der Umgebung anlegen (HOMEATLAS_USER / HOMEATLAS_PASSWORD), falls noch keines existiert."""
+    pw = db.env("PASSWORD")
     if pw and not has_users():
         db.x("INSERT INTO users(username,pw,role,created) VALUES(?,?,'admin',?)",
-             (os.environ.get("LABVIS_USER") or "admin", hash_pw(pw), db.now()))
+             (db.env("USER") or "admin", hash_pw(pw), db.now()))
     db.x("DELETE FROM sessions WHERE expires<?", (db.now(),))
 
 
 def current_user(request):
-    tok = request.cookies.get(COOKIE)
+    tok = request.cookies.get(COOKIE) or request.cookies.get(OLD_COOKIE)
     if not tok:
         return None
     return db.one("SELECT u.id, u.username, u.role FROM sessions s JOIN users u ON u.id=s.user_id "
@@ -149,11 +150,12 @@ def login(request: Request, data: dict = Body(...)):
 
 @router.post("/logout")
 def logout(request: Request):
-    tok = request.cookies.get(COOKIE)
+    tok = request.cookies.get(COOKIE) or request.cookies.get(OLD_COOKIE)
     if tok:
         db.x("DELETE FROM sessions WHERE token_hash=?", (_th(tok),))
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(COOKIE, path="/")
+    resp.delete_cookie(OLD_COOKIE, path="/")
     return resp
 
 
@@ -165,7 +167,7 @@ def password(request: Request, data: dict = Body(...)):
     _valid(me["username"], data.get("new"))
     db.x("UPDATE users SET pw=? WHERE id=?", (hash_pw(data["new"]), me["id"]))
     # alle anderen Sitzungen dieses Kontos beenden
-    db.x("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (me["id"], _th(request.cookies.get(COOKIE, ""))))
+    db.x("DELETE FROM sessions WHERE user_id=? AND token_hash<>?", (me["id"], _th(request.cookies.get(COOKIE) or request.cookies.get(OLD_COOKIE, ""))))
     return {"ok": True}
 
 

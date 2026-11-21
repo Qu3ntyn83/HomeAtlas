@@ -27,9 +27,9 @@ KINDS = {
         ["token_secret", "Token-Secret", "", "password"]],
         "help": "Der Token braucht selbst Leserechte: Bei aktivierter „Privilege Separation“ (Standard) erbt er die Rechte des "
                 "Benutzers nicht. In Proxmox unter Datacenter → Permissions → Add → API Token Permission den Pfad „/“, den Token und "
-                "die Rolle „PVEAuditor“ eintragen (Propagate an). Ohne das meldet sich LabVis zwar an, sieht aber keine VMs und Container."},
-    "docker": {"label": "Docker", "fields": [["url", "API-URL (http://host:2375) – leer = lokaler Docker auf dem LabVis-Host"]],
-               "help": "Für den Docker auf dem Host, auf dem LabVis selbst läuft, das Feld leer lassen: LabVis liest dann über den "
+                "die Rolle „PVEAuditor“ eintragen (Propagate an). Ohne das meldet sich HomeAtlas zwar an, sieht aber keine VMs und Container."},
+    "docker": {"label": "Docker", "fields": [["url", "API-URL (http://host:2375) – leer = lokaler Docker auf dem HomeAtlas-Host"]],
+               "help": "Für den Docker auf dem Host, auf dem HomeAtlas selbst läuft, das Feld leer lassen: HomeAtlas liest dann über den "
                        "Docker-Socket. Dafür muss in der docker-compose.yml unter volumes die Zeile "
                        "„- /var/run/docker.sock:/var/run/docker.sock:ro“ stehen (in der aktuellen Vorlage enthalten). "
                        "Für andere Hosts die Adresse einer freigegebenen Docker-API oder eines docker-socket-proxy eintragen."},
@@ -43,15 +43,15 @@ KINDS = {
     "qnap": {"label": "QNAP QTS / QuTS hero", "fields": [
         ["host", "Host/IP oder URL (https://nas:443)"], ["port", "Port der Weboberfläche", "443"], ["user", "Benutzer (Administratorgruppe)"],
         ["password", "Passwort", "", "password"]],
-        "help": "QTS kennt keine API-Schlüssel – LabVis meldet sich mit einem Benutzer an. Lege dafür am NAS einen eigenen Benutzer an "
+        "help": "QTS kennt keine API-Schlüssel – HomeAtlas meldet sich mit einem Benutzer an. Lege dafür am NAS einen eigenen Benutzer an "
                 "(Systemsteuerung → Benutzer), Gruppe „administrators“, ohne zweistufige Anmeldung, mit langem Zufallspasswort und "
-                "ohne Zugriff auf Freigaben. LabVis liest nur und meldet sich nach jedem Abruf wieder ab."},
+                "ohne Zugriff auf Freigaben. HomeAtlas liest nur und meldet sich nach jedem Abruf wieder ab."},
     "synology": {"label": "Synology DSM", "fields": [
         ["host", "Host/IP oder URL (https://nas:5001)"], ["port", "Port der Weboberfläche", "5001"], ["user", "Benutzer (Administratorgruppe)"],
         ["password", "Passwort", "", "password"]],
-        "help": "DSM kennt keine API-Schlüssel – LabVis meldet sich mit einem Benutzer an. Lege dafür in DSM einen eigenen Benutzer an "
+        "help": "DSM kennt keine API-Schlüssel – HomeAtlas meldet sich mit einem Benutzer an. Lege dafür in DSM einen eigenen Benutzer an "
                 "(Systemsteuerung → Benutzer & Gruppe), Gruppe „administrators“, ohne 2-Faktor-Authentifizierung, mit langem Zufallspasswort, "
-                "ohne Zugriff auf Freigaben und unter „Anwendungen“ nur DSM erlaubt. LabVis liest nur und meldet sich nach jedem Abruf wieder ab."},
+                "ohne Zugriff auf Freigaben und unter „Anwendungen“ nur DSM erlaubt. HomeAtlas liest nur und meldet sich nach jedem Abruf wieder ab."},
     "ipmi": {"label": "IPMI / Redfish (Supermicro, iDRAC, iLO)", "fields": [
         ["host", "Adresse des BMC (IPMI-Anschluss)"], ["port", "Port", "443"], ["user", "Benutzer", "ADMIN"], ["password", "Passwort", "", "password"]],
         "help": "Liest über Redfish, die HTTPS-Schnittstelle des BMC. Lege im IPMI einen eigenen Benutzer mit der Stufe „Operator“ oder "
@@ -80,7 +80,7 @@ def reach(host, port, timeout=4):
         socket.create_connection((host, int(port)), timeout=timeout).close()
     except socket.timeout:
         raise RuntimeError(f"Keine Antwort von {host}:{port}. Stimmen Adresse und Port, und erlaubt die Firewall "
-                           f"den Zugriff vom LabVis-Host auf diesen Port?") from None
+                           f"den Zugriff vom HomeAtlas-Host auf diesen Port?") from None
     except ConnectionRefusedError:
         raise RuntimeError(f"{host}:{port} lehnt die Verbindung ab – dort läuft kein Dienst. "
                            f"Stimmt der Port?") from None
@@ -277,10 +277,10 @@ def _unix_get(sock_path, path, timeout=15):
     try:
         s.connect(sock_path)
     except FileNotFoundError:
-        raise RuntimeError(f"Docker-Socket {sock_path} fehlt im LabVis-Container. In der docker-compose.yml unter volumes "
+        raise RuntimeError(f"Docker-Socket {sock_path} fehlt im HomeAtlas-Container. In der docker-compose.yml unter volumes "
                            f"„- /var/run/docker.sock:/var/run/docker.sock:ro“ ergänzen und „docker compose up -d“ ausführen") from None
     except PermissionError:
-        raise RuntimeError(f"Kein Zugriff auf {sock_path} – der LabVis-Container muss als root laufen (Standard)") from None
+        raise RuntimeError(f"Kein Zugriff auf {sock_path} – der HomeAtlas-Container muss als root laufen (Standard)") from None
     except OSError as e:
         raise RuntimeError(f"Docker-Socket {sock_path} antwortet nicht ({e.strerror or e}) – läuft Docker auf dem Host?") from None
     conn.sock = s
@@ -296,7 +296,7 @@ def _unix_get(sock_path, path, timeout=15):
 
 
 def local_ips():
-    """IPv4-Adressen des LabVis-Hosts (der Container läuft im Host-Netz), die Hauptadresse zuerst."""
+    """IPv4-Adressen des HomeAtlas-Hosts (der Container läuft im Host-Netz), die Hauptadresse zuerst."""
     out = []
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -374,7 +374,7 @@ def _walk(host, community, oid):
         msg = err[-1].strip() if err else "SNMP-Fehler"
         if "Timeout" in msg or "No Response" in msg:
             msg = (f"Keine SNMP-Antwort von {host}. Ist SNMP v2c am Gerät aktiv, stimmt die Community, und darf "
-                   f"der LabVis-Host abfragen (Zugriffsliste am Gerät, UDP 161)?")
+                   f"der HomeAtlas-Host abfragen (Zugriffsliste am Gerät, UDP 161)?")
         raise RuntimeError(msg[:300])
     return parse_walk(r.stdout, oid)
 
@@ -789,8 +789,8 @@ def sync_qnap(integ):
 SYNO_ERR = {400: "Benutzer oder Passwort falsch", 401: "das Konto ist deaktiviert", 402: "dem Benutzer fehlt die Berechtigung für DSM",
             403: "für diesen Benutzer ist die 2-Faktor-Authentifizierung aktiv – dafür einen eigenen Benutzer ohne 2FA anlegen",
             404: "für diesen Benutzer ist die 2-Faktor-Authentifizierung aktiv – dafür einen eigenen Benutzer ohne 2FA anlegen",
-            406: "DSM erzwingt 2-Faktor-Authentifizierung für dieses Konto – in DSM für den LabVis-Benutzer ausnehmen",
-            407: "DSM hat die Adresse von LabVis nach Fehlversuchen gesperrt (Systemsteuerung → Sicherheit → Konto)",
+            406: "DSM erzwingt 2-Faktor-Authentifizierung für dieses Konto – in DSM für den HomeAtlas-Benutzer ausnehmen",
+            407: "DSM hat die Adresse von HomeAtlas nach Fehlversuchen gesperrt (Systemsteuerung → Sicherheit → Konto)",
             408: "das Passwort ist abgelaufen", 409: "das Passwort ist abgelaufen", 410: "das Passwort muss erst geändert werden"}
 RAID = {"raid_1": "RAID 1", "raid_5": "RAID 5", "raid_6": "RAID 6", "raid_10": "RAID 10", "raid_0": "RAID 0", "basic": "Basic",
         "shr_without_disk_protect": "SHR (ohne Schutz)", "shr_with_1_disk_protect": "SHR", "shr_with_2_disk_protect": "SHR-2", "jbod": "JBOD"}
@@ -882,7 +882,7 @@ def sync_synology(integ):
     apis.update(data("SYNO.API.Info", "query", query="SYNO.API.Auth,SYNO.DSM.Info,SYNO.DSM.Network,SYNO.Storage.CGI.Storage,SYNO.Core.System"))
     if "SYNO.API.Auth" not in apis:
         raise RuntimeError("Synology: Anmelde-Schnittstelle nicht gefunden – ist das ein Synology-NAS?")
-    login = call("SYNO.API.Auth", "login", post=True, maxv=6, account=c["user"].strip(), passwd=c["password"], session="LabVis", format="sid")
+    login = call("SYNO.API.Auth", "login", post=True, maxv=6, account=c["user"].strip(), passwd=c["password"], session="HomeAtlas", format="sid")
     if not login.get("success"):
         code = (login.get("error") or {}).get("code")
         raise RuntimeError("Synology: Anmeldung abgelehnt – " + SYNO_ERR.get(code, f"Fehler {code}"))
@@ -903,7 +903,7 @@ def sync_synology(integ):
         info = synology_parse(dsm, net, *extra)
     finally:
         try:
-            call("SYNO.API.Auth", "logout", maxv=6, session="LabVis")
+            call("SYNO.API.Auth", "logout", maxv=6, session="HomeAtlas")
         except RuntimeError:
             pass
     dev, nics = apply_host(integ, info, host, kind="synology", vendor="Synology", icon="synology", dtype="nas",
