@@ -102,19 +102,28 @@ const wlan = id => S.wlans.find(w => w.id === id);
 const ssidsOf = id => S.wlans.filter(w => (w.aps || []).includes(id));
 const vtag = v => v ? (v.vid != null ? 'VLAN ' + v.vid : v.name) : '';
 function topDev(id) { let d = dev(id), n = 0; while (d && d.parent_id && n++ < 8) d = dev(d.parent_id) || d; return d || null; }
-// Raum eines Geräts: eigener Eintrag, sonst der des Hosts, sonst der Standort des Racks
+// Raum eines Geräts: eigener Eintrag, sonst der nächste übergeordnete (Host, Bridge, Bereich), sonst der Standort des Racks
 const NOROOM = 'Ohne Raum';
 function roomOf(d) {
-  const t = topDev(d.id) || d, sh = (t.meta || {}).shelf ? dev(t.meta.shelf) : null;
+  for (let x = d, n = 0; x && n < 10; x = x.parent_id ? dev(x.parent_id) : null, n++) if ((x.room || '').trim()) return x.room.trim();
+  const t = roomUnit(d.id) || d, sh = (t.meta || {}).shelf ? dev(t.meta.shelf) : null;
   const rack = S.racks.find(r => r.id === (t.rack_id || (sh && sh.rack_id)));
-  return (d.room || t.room || (rack && rack.location) || '').trim() || NOROOM;
+  return ((rack && rack.location) || '').trim() || NOROOM;
+}
+// In der Raum-Ansicht zählen Bereiche (Gruppen) nicht: ihre Geräte stehen einzeln in ihrem Raum
+function roomUnit(id) {
+  let d = dev(id), n = 0;
+  while (d && d.parent_id && n++ < 8) { const p = dev(d.parent_id); if (!p || p.type === 'group') break; d = p; }
+  return d || null;
 }
 const allRooms = () => [...new Set(S.devices.map(d => (d.room || '').trim()).concat(S.racks.map(r => (r.location || '').trim())).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 let viewMode = 'normal', roomIds = new Map();
 // Karte, zu der ein Gerät gehört: in der Raum-Ansicht die Raumkarte, sonst die Karte des obersten Geräts
 function topOf(id) {
   const t = topDev(id); if (!t) return null;
-  return viewMode === 'rooms' ? (roomIds.get(roomOf(t)) ?? t.id) : t.id;
+  if (viewMode !== 'rooms') return t.id;
+  const u = roomUnit(id) || t;
+  return roomIds.get(roomOf(u)) ?? t.id;
 }
 const roomPos = () => { try { return JSON.parse(localStorage.getItem('labvis.roompos') || '{}'); } catch (e) { return {}; } };
 const saveRoomPos = (name, x, y) => { try { const p = roomPos(); p[name] = {x, y}; localStorage.setItem('labvis.roompos', JSON.stringify(p)); } catch (e) { /* Position gilt dann nur bis zum Neuladen */ } };
@@ -535,7 +544,7 @@ function renderTopo() {
       `(Format von homelab-diagram).<div class="acts"><button class="btn pri" data-act="newDevice">+ Gerät</button></div></div></div>`;
     return;
   }
-  if (viewMode === 'rooms') buildRoomCards(tops);
+  if (viewMode === 'rooms') buildRoomCards(tops.flatMap(d => d.type === 'group' ? kidsOf(d.id) : [d]));
   else {
     cards = new Map(tops.map(d => [d.id, buildCard(d)]));
     if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
