@@ -1,4 +1,4 @@
-"""LabVis – interaktive Homelab-Dokumentation: Topologie, Racks, Netzwerke, Scanner, Anbindungen."""
+"""HomeAtlas – interaktive Homelab-Dokumentation: Topologie, Racks, Netzwerke, Scanner, Anbindungen."""
 import base64
 import hashlib
 import os
@@ -19,7 +19,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.24.1"
+VERSION = "0.25.0"
 
 
 def _build_id():
@@ -55,7 +55,7 @@ TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans", "navlin
 MASK = "••••••••"
 SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if len(f) > 3 and f[3] == "password"}
 
-app = FastAPI(title="LabVis", docs_url="/api/docs", openapi_url="/api/openapi.json")
+app = FastAPI(title="HomeAtlas", docs_url="/api/docs", openapi_url="/api/openapi.json")
 app.middleware("http")(auth.middleware)
 app.include_router(auth.router)
 app.include_router(monitor.router)
@@ -79,7 +79,7 @@ def startup():
     auth.bootstrap()
     monitor.init()
     ICON_CACHE.mkdir(parents=True, exist_ok=True)
-    if not os.environ.get("LABVIS_NO_SCHEDULER"):
+    if not db.env("NO_SCHEDULER"):
         threading.Thread(target=_scheduler, daemon=True).start()
         monitor.start()
 
@@ -453,13 +453,13 @@ def export():
     data["checks"] = db.q("SELECT id, " + ", ".join(monitor.FIELDS) + ", source FROM checks")
     data["types"] = db.q("SELECT * FROM types")
     data["icons"] = {f.name: base64.b64encode(f.read_bytes()).decode() for f in sorted(types.UPLOADS.glob("*")) if f.is_file()} if types.UPLOADS.exists() else {}
-    return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="labvis-export.json"'})
+    return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="homeatlas-export.json"'})
 
 
 @app.post("/api/restore/all")
 def restore(data: dict = Body(...)):
     if not all(t in data for t in TABLES if t not in ("wlans", "navlinks")):   # ältere Exporte kennen noch keine WLANs und Menü-Links
-        raise HTTPException(400, "Kein LabVis-Export")
+        raise HTTPException(400, "Kein HomeAtlas- oder LabVis-Export")
     with db.conn() as c:
         for t in TABLES:
             c.execute(f"DELETE FROM {t}")
@@ -503,7 +503,7 @@ def icon(name: str):
     if time.time() - _icon_miss.get(name, 0) > 6 * 3600:
         for src in ICON_SOURCES:
             try:
-                req = urllib.request.Request(src.format(name), headers={"User-Agent": "LabVis"})
+                req = urllib.request.Request(src.format(name), headers={"User-Agent": "HomeAtlas"})
                 body = urllib.request.urlopen(req, timeout=6).read()
                 if b"<svg" in body[:2000]:
                     (ICON_CACHE / f"{name}.svg").write_bytes(body)

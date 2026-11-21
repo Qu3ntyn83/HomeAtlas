@@ -1,6 +1,6 @@
 {
-  "name": "LabVis",
-  "short_name": "LabVis",
+  "name": "HomeAtlas",
+  "short_name": "HomeAtlas",
   "description": "Interaktive Homelab-Dokumentation",
   "start_url": "/",
   "display": "standalone",

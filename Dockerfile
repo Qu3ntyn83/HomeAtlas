@@ -5,9 +5,9 @@ WORKDIR /srv
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
-ENV LABVIS_DATA=/data LABVIS_PORT=8099 PYTHONUNBUFFERED=1
+ENV HOMEATLAS_DATA=/data HOMEATLAS_PORT=8099 PYTHONUNBUFFERED=1
 VOLUME /data
 EXPOSE 8099
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD python -c "import os,urllib.request as u;u.urlopen('http://127.0.0.1:%s/healthz'%os.environ['LABVIS_PORT'],timeout=4)"
-CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${LABVIS_PORT}"]
+  CMD python -c "import os,urllib.request as u;u.urlopen('http://127.0.0.1:%s/healthz'%os.environ['HOMEATLAS_PORT'],timeout=4)"
+CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${HOMEATLAS_PORT}"]

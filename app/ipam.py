@@ -535,7 +535,7 @@ def ipam_dns(data: dict = Body(...)):
                 raise HTTPException(400, f"Ungültige IP-Adresse für {h}")
             if any(r["hostname"].lower() == h and r["domain"].lower() == d and r["src"] == target for r in snap.get("dns", [])):
                 raise HTTPException(400, f"{h}.{d} gibt es schon – stattdessen die Adresse ändern")
-            desc = (it.get("description") or "LabVis")[:255]
+            desc = (it.get("description") or "HomeAtlas")[:255]
             body = {"host": {"enabled": "1", "hostname": h, "domain": d, "rr": "A", "server": ip, "description": desc}} if target == "unbound" else \
                 {"host": {"host": h, "domain": d, "ip": ip, "descr": desc}}
             path = "/unbound/settings/add_host_override" if target == "unbound" else "/dnsmasq/settings/add_host"
@@ -578,7 +578,7 @@ def ipam_dhcp(data: dict = Body(...)):
         if any(r["mac"] == mac for r in snap.get("reservations", [])):
             raise HTTPException(400, f"Für {mac} gibt es schon eine Reservierung")
         target = build()["dhcp_target"]
-        desc = (data.get("description") or "LabVis")[:255]
+        desc = (data.get("description") or "HomeAtlas")[:255]
         if target == "kea":
             sub = next((s for s in snap.get("subnets", []) if s["subnet"] and ipaddress.IPv4Address(ip) in ipaddress.IPv4Network(s["subnet"], strict=False)), None)
             if not sub:
