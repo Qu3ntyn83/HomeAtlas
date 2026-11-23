@@ -27,8 +27,12 @@ Vollständige Übersicht, was HomeAtlas kann. Einrichtung und Betrieb stehen in 
 - VMs und Container als Chips im Host, deren Container als Zeilen; Hardware-Kacheln (CPU, RAM, Platten, Netzteile …)
 - **Größe von Hand:** Bereiche und Karten mit Inhalt am Griff unten rechts ziehen; die Breite bestimmt die Spaltenzahl; zweimal antippen = automatisch
 - **VLAN-Filter**, Gerätesuche springt zur Karte
-- **Ansicht Normal | Räume:** je Raum eine Karte, Verbindungen zwischen Räumen; Bereiche werden dort aufgelöst – jedes Gerät steht in seinem Raum,
-  ohne eigenen Raum gilt der des nächsten übergeordneten Geräts bzw. Bereichs
+- **Ansicht Normal | Räume:** je Raum eine Karte, Verbindungen zwischen Räumen; Bereiche werden dort aufgelöst, auch verschachtelte – jedes Gerät steht in seinem Raum,
+  ohne eigenen Raum gilt der des nächsten übergeordneten Geräts bzw. Bereichs. Geräte an einer Bridge oder einem Host mit anderem Raum (Lampe im
+  Schlafzimmer an der Bridge im Keller) stehen einzeln in ihrem Raum, VMs ohne eigenen Raum bleiben im Host
+- **Etagen:** Räume lassen sich Etagen zuordnen (Raumkarte anklicken oder „Etagen“ in der Raumansicht). Etagen anlegen, umbenennen,
+  sortieren (oberste zuerst) und löschen. Die Raumansicht ordnet die Räume in Bändern je Etage von oben nach unten an, oben lässt sich
+  auf eine Etage filtern. Etage steht auch im Geräte-Panel; Etagen und Zuordnungen sind Teil von Export und Wiederherstellung
 - **Bereiche** (Gruppen), z. B. alle Lampen eines Raums; „Bereich auflösen“ löscht nichts
 - **Mehrfachauswahl** (Auswählen bzw. Strg/Umschalt + Klick) mit Sammeländerung, Gruppieren, Zusammenführen, Löschen
 - Statuspunkt je Gerät (online/offline/unbekannt), gelb, wenn ein Dienst des Geräts ausfällt

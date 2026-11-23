@@ -57,6 +57,10 @@ CREATE TABLE IF NOT EXISTS types(
   key TEXT PRIMARY KEY, label TEXT, icon TEXT, area TEXT, base TEXT, rules TEXT, hidden INTEGER DEFAULT 0, sort INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS navlinks(
   id INTEGER PRIMARY KEY, grp TEXT, label TEXT NOT NULL, url TEXT NOT NULL, icon TEXT, sort INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS floors(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, sort INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS rooms(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, floor_id INTEGER, note TEXT);
 CREATE TABLE IF NOT EXISTS users(
   id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE COLLATE NOCASE, pw TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'admin', created REAL, last_login REAL);
@@ -75,6 +79,8 @@ COLUMNS = {
     "links": ["a_id", "b_id", "a_port", "b_port", "speed", "vlan_id", "trunk", "kind", "note", "source", "wlan_id"],
     "wlans": ["ssid", "vlan_id", "band", "security", "note", "aps"],
     "navlinks": ["grp", "label", "url", "icon", "sort"],
+    "floors": ["name", "sort"],
+    "rooms": ["name", "floor_id", "note"],
     "integrations": ["kind", "name", "device_id", "config", "enabled"],
 }
 DEFAULTS = {"scan_interval_min": "60", "sync_interval_min": "15", "snmp_community": "public",

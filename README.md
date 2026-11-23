@@ -26,7 +26,7 @@ Home Assistant, NAS und IPMI.
 
 | Bereich | Kurz |
 |---|---|
-| **Topologie** | Ordner-Karten, Kabelbreite = Geschwindigkeit, VLAN-Farben, VMs/Container als Chips, Räume, Bereiche, Größe ziehbar, SVG-Export |
+| **Topologie** | Ordner-Karten, Kabelbreite = Geschwindigkeit, VLAN-Farben, VMs/Container als Chips, Räume mit Etagen, Bereiche, Größe ziehbar, SVG-Export |
 | **Verbindungen** | Kabel, WLAN, WAN, API, logisch und Smarthome: Zigbee, Z-Wave, Thread, Matter, BLE, DECT, Homematic IP, EnOcean, 433/868 MHz, LoRa, IR, MQTT, KNX, Feldbus, USB |
 | **Geräte** | mehrere Adressen je Gerät, Zusammenführen, Notizen, Sammeländerung, eigene Gerätetypen und hochgeladene Icons |
 | **Racks** | HE-genau, Patchpanels, Rackböden, Blenden, Kabelführungen |

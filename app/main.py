@@ -19,7 +19,7 @@ ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.25.2"
+VERSION = "0.26.0"
 
 
 def _build_id():
@@ -51,7 +51,8 @@ def _page(name):
                     headers={"Cache-Control": "no-store"})
 
 
-TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans", "navlinks")
+TABLES = ("vlans", "racks", "devices", "links", "integrations", "wlans", "navlinks", "floors", "rooms")
+NEWER = ("wlans", "navlinks", "floors", "rooms")   # Tabellen, die ältere Exporte noch nicht kennen
 MASK = "••••••••"
 SECRET_FIELDS = {f[0] for k in connectors.KINDS.values() for f in k["fields"] if len(f) > 3 and f[3] == "password"}
 
@@ -107,6 +108,8 @@ def state(request: Request):
         "icons": types.list_icons(),
         "gateways": [{k: g.get(k) for k in ("name", "address", "status", "delay", "loss")} for g in ipam.gateways()],
         "navlinks": db.q("SELECT * FROM navlinks ORDER BY sort, label COLLATE NOCASE"),
+        "floors": db.q("SELECT * FROM floors ORDER BY sort, id"),
+        "rooms": db.q("SELECT * FROM rooms ORDER BY name COLLATE NOCASE"),
         "checks": monitor.light(),
         "discoveries": db.q("SELECT * FROM discoveries ORDER BY state='ignored', last_seen DESC"),
         "integrations": [_mask(i) for i in db.q("SELECT * FROM integrations ORDER BY id")],
@@ -120,7 +123,7 @@ def state(request: Request):
 
 def _clean(table, data):
     data = {k: (None if v == "" else v) for k, v in data.items() if k in db.COLUMNS[table]}
-    for k in ("vid", "units", "vlan_id", "parent_id", "rack_id", "rack_u", "rack_height", "a_id", "b_id", "device_id", "wlan_id", "sort"):
+    for k in ("vid", "units", "vlan_id", "parent_id", "rack_id", "rack_u", "rack_height", "a_id", "b_id", "device_id", "wlan_id", "sort", "floor_id"):
         if data.get(k) is not None:
             data[k] = int(data[k])
     if table == "navlinks":
@@ -131,6 +134,13 @@ def _clean(table, data):
             raise HTTPException(400, "Die Adresse muss mit http:// oder https:// beginnen")
         if "label" in data and not data.get("label"):
             raise HTTPException(400, "Bezeichnung fehlt")
+    if table in ("floors", "rooms"):
+        if isinstance(data.get("name"), str):
+            data["name"] = data["name"].strip() or None
+        if "name" in data and not data.get("name"):
+            raise HTTPException(400, "Name fehlt")
+        if table == "rooms" and data.get("floor_id") and not db.one("SELECT id FROM floors WHERE id=?", (data["floor_id"],)):
+            raise HTTPException(400, "Diese Etage gibt es nicht")
     return data
 
 
@@ -146,6 +156,11 @@ def create(table: str, data: dict = Body(...)):
         if key(data.get("config") or {})[0] and any(i["kind"] == data.get("kind") and key(i["config"] or {}) == key(data["config"])
                                                  for i in db.q("SELECT kind, config FROM integrations")):
             raise HTTPException(400, "Für diese Adresse gibt es schon eine Anbindung dieser Art")
+    if table == "rooms":                                  # ein Raum je Name: vorhandenen Eintrag aktualisieren
+        old = db.one("SELECT id FROM rooms WHERE name=?", (data.get("name"),))
+        if old:
+            db.update("rooms", old["id"], data)
+            return {"id": old["id"]}
     if table == "links" and data.get("a_id") == data.get("b_id"):
         raise HTTPException(400, "Ein Gerät kann nicht mit sich selbst verbunden werden")
     return {"id": db.insert(table, data)}
@@ -194,7 +209,10 @@ def remove(table: str, rid: int):
         db.x("UPDATE devices SET integration_id=NULL, ext_id=NULL WHERE integration_id=?", (rid,))
         db.x("DELETE FROM integrations WHERE id=?", (rid,))
         db.x("DELETE FROM opn_cache WHERE integration_id=?", (rid,))
-    elif table in ("links", "discoveries", "navlinks"):
+    elif table == "floors":
+        db.x("UPDATE rooms SET floor_id=NULL WHERE floor_id=?", (rid,))
+        db.x("DELETE FROM floors WHERE id=?", (rid,))
+    elif table in ("links", "discoveries", "navlinks", "rooms"):
         db.x(f"DELETE FROM {table} WHERE id=?", (rid,))
     else:
         raise HTTPException(404)
@@ -458,7 +476,7 @@ def export():
 
 @app.post("/api/restore/all")
 def restore(data: dict = Body(...)):
-    if not all(t in data for t in TABLES if t not in ("wlans", "navlinks")):   # ältere Exporte kennen noch keine WLANs und Menü-Links
+    if not all(t in data for t in TABLES if t not in NEWER):
         raise HTTPException(400, "Kein HomeAtlas- oder LabVis-Export")
     with db.conn() as c:
         for t in TABLES:
