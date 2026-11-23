@@ -60,6 +60,8 @@ def init():
 
 # ------------------------------------------------------------------ Prüfarten
 def _checksum(data):
+    if len(data) % 2:
+        data += b"\0"  # ungerade Länge: nach RFC 1071 mit Nullbyte auffüllen
     s = sum(struct.unpack("!%dH" % (len(data) // 2), data))
     s = (s >> 16) + (s & 0xFFFF)
     s += s >> 16
@@ -90,7 +92,8 @@ def ping(host, timeout=2.0):
                     data, peer = s.recvfrom(1024)
                 except socket.timeout:
                     break
-                body = data[20:] if kind == socket.SOCK_RAW else data
+                # Raw-Sockets liefern den IP-Kopf mit, dessen Länge steht im IHL-Feld
+                body = data[(data[0] & 0x0F) * 4:] if kind == socket.SOCK_RAW and data else data
                 if peer[0] == addr and len(body) >= 8 and body[0] == 0 and struct.unpack("!H", body[6:8])[0] == seq:
                     return (time.time() - t0) * 1000
             raise TimeoutError("keine Antwort auf Ping")
