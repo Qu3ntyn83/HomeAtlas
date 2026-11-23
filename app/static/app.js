@@ -118,12 +118,22 @@ function roomUnit(id) {
 }
 const allRooms = () => [...new Set(S.devices.map(d => (d.room || '').trim()).concat(S.racks.map(r => (r.location || '').trim())).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 let viewMode = 'normal', roomIds = new Map();
+// Raum-Ansicht: Ein Gerät steht als eigener Eintrag in seinem Raum, wenn es oben liegt, direkt in einem Bereich steckt
+// oder einen anderen Raum hat als das Gerät darüber (z. B. Lampe im Schlafzimmer an der Bridge im Keller).
+// Bereiche selbst erscheinen nicht, auch verschachtelte nicht. Alles andere bleibt Zeile im Eintrag darüber.
+function roomEntry(d) {
+  if (!d || d.type === 'group' || PASSIVE.has(d.type)) return false;
+  const p = d.parent_id ? dev(d.parent_id) : null;
+  return !p || p.type === 'group' || roomOf(d) !== roomOf(p);
+}
+const chipKids = c => viewMode === 'rooms' ? kidsOf(c.id).filter(k => !roomEntry(k)) : kidsOf(c.id);
 // Karte, zu der ein Gerät gehört: in der Raum-Ansicht die Raumkarte, sonst die Karte des obersten Geräts
 function topOf(id) {
   const t = topDev(id); if (!t) return null;
   if (viewMode !== 'rooms') return t.id;
-  const u = roomUnit(id) || t;
-  return roomIds.get(roomOf(u)) ?? t.id;
+  let e = dev(id), n = 0;
+  while (e && !roomEntry(e) && e.parent_id && n++ < 10) e = dev(e.parent_id);
+  return roomIds.get(roomOf(e && roomEntry(e) ? e : (roomUnit(id) || t))) ?? t.id;
 }
 // frühere Einstellungen aus LabVis übernehmen (einmalig)
 try { for (const k of ['nav', 'navgrp', 'roompos']) if (localStorage.getItem('labvis.' + k) !== null && localStorage.getItem('homeatlas.' + k) === null) { localStorage.setItem('homeatlas.' + k, localStorage.getItem('labvis.' + k)); localStorage.removeItem('labvis.' + k); } } catch (e) { /* ohne Speicher nichts zu übernehmen */ }
@@ -228,11 +238,11 @@ function wrapText(text, width, size, max) {
   return out.map(l => fit(l, width, size));
 }
 function chipH(c) {
-  const g = kidsOf(c.id).length;
+  const g = chipKids(c).length;
   return (c.ip || c.hostname ? 60 : 46) + (memoOn(c) ? 15 : 0) + (g ? g * 19 + 8 : 0);
 }
 function chipSvg(c, x, y, w, parentVlan) {
-  const h = chipH(c), col = vcol(c.vlan_id), gk = kidsOf(c.id);
+  const h = chipH(c), col = vcol(c.vlan_id), gk = chipKids(c);
   const stroke = c.vlan_id && c.vlan_id !== parentVlan ? col : PAL.BORDER;
   const off = (vfilter && !inVlan(c, vfilter) ? ' off' : '') + (multi.has(c.id) ? ' msel' : '');
   const pr = c.meta && LK[c.meta.proto], tag = c.meta && c.meta.vmid ? (c.type === 'vm' ? 'VM ' : 'CT ') + c.meta.vmid : pr ? pr.short : '';
@@ -546,7 +556,7 @@ function renderTopo() {
       `(Format von homelab-diagram).<div class="acts"><button class="btn pri" data-act="newDevice">+ Gerät</button></div></div></div>`;
     return;
   }
-  if (viewMode === 'rooms') buildRoomCards(tops.flatMap(d => d.type === 'group' ? kidsOf(d.id) : [d]));
+  if (viewMode === 'rooms') buildRoomCards(S.devices.filter(roomEntry));
   else {
     cards = new Map(tops.map(d => [d.id, buildCard(d)]));
     if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
