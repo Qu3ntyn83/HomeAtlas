@@ -2,8 +2,12 @@
 # Aktualisiert HomeAtlas auf den Stand des Repos, zeigt danach, welche Version wirklich läuft.
 set -e
 cd "$(dirname "$0")"
-echo "== Repo =="
-git pull --ff-only
+# Nach dem Pull startet sich das Skript neu: sonst liefe beim Update noch die alte Fassung von update.sh weiter
+if [ "$1" != "--nach-pull" ]; then
+  echo "== Repo =="
+  git pull --ff-only
+  exec sh "$(basename "$0")" --nach-pull
+fi
 git log -1 --format='Stand: %h %s (%cd)' --date=short
 echo "== Container neu bauen und starten =="
 # Umbenennung LabVis → HomeAtlas: der alte Container „labvis“ würde sonst den Port belegen
