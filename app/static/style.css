@@ -88,6 +88,9 @@ body.nav-min #collapse .ni{transform:rotate(180deg)}
 .vp{background:var(--panel);border:1px solid var(--border);border-left-width:4px;border-radius:6px;padding:3px 9px;
   font:500 12px var(--mono);cursor:pointer;color:var(--muted)}
 .vp.on{color:var(--text);background:var(--panel2)}
+.vp.fp{border-left-color:var(--faint);font-family:inherit;font-size:12.5px}.vp.fp.on{border-left-color:var(--link)}
+.vsep{width:1px;align-self:stretch;background:var(--border);margin:2px 4px}
+select.floorsel{min-width:150px;padding:4px 8px}
 #tools{position:absolute;right:14px;bottom:14px;display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 #legend{position:absolute;left:14px;bottom:14px;background:var(--panel);border:1px solid var(--border);border-radius:10px;
   padding:10px 12px;font-size:11.5px;color:var(--muted);display:grid;grid-template-columns:auto auto;gap:4px 10px;align-items:center}

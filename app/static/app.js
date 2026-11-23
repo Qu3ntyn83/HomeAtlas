@@ -117,7 +117,13 @@ function roomUnit(id) {
   return d || null;
 }
 const allRooms = () => [...new Set(S.devices.map(d => (d.room || '').trim()).concat(S.racks.map(r => (r.location || '').trim())).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-let viewMode = 'normal', roomIds = new Map();
+let viewMode = 'normal', roomIds = new Map(), floorFilter = null, floorBoxes = [];
+// Etagen: Räume sind Namen an Geräten und Racks, die Zuordnung zur Etage steht in der Tabelle rooms
+const NOFLOOR = 'Ohne Etage';
+const floorsSorted = () => [...(S.floors || [])].sort((a, b) => (a.sort || 0) - (b.sort || 0) || a.id - b.id);
+const roomRow = name => (S.rooms || []).find(r => r.name === name);
+const floorOf = name => { const r = roomRow(name); return r && r.floor_id ? (S.floors || []).find(f => f.id === r.floor_id) || null : null; };
+const floorKey = name => { const f = floorOf(name); return f ? f.id : 0; };
 // Raum-Ansicht: Ein Gerät steht als eigener Eintrag in seinem Raum, wenn es oben liegt, direkt in einem Bereich steckt
 // oder einen anderen Raum hat als das Gerät darüber (z. B. Lampe im Schlafzimmer an der Bridge im Keller).
 // Bereiche selbst erscheinen nicht, auch verschachtelte nicht. Alles andere bleibt Zeile im Eintrag darüber.
@@ -138,6 +144,8 @@ function topOf(id) {
 // frühere Einstellungen aus LabVis übernehmen (einmalig)
 try { for (const k of ['nav', 'navgrp', 'roompos']) if (localStorage.getItem('labvis.' + k) !== null && localStorage.getItem('homeatlas.' + k) === null) { localStorage.setItem('homeatlas.' + k, localStorage.getItem('labvis.' + k)); localStorage.removeItem('labvis.' + k); } } catch (e) { /* ohne Speicher nichts zu übernehmen */ }
 const roomPos = () => { try { return JSON.parse(localStorage.getItem('homeatlas.roompos') || '{}'); } catch (e) { return {}; } };
+// Gemerkte Raum-Positionen verwerfen, damit Räume nach einem Etagenwechsel im richtigen Band landen (null = alle)
+const dropRoomPos = names => { try { const p = names ? roomPos() : {}; for (const n of names || []) delete p[n]; localStorage.setItem('homeatlas.roompos', JSON.stringify(p)); } catch (e) { /* ohne Speicher nichts zu verwerfen */ } };
 const saveRoomPos = (name, x, y) => { try { const p = roomPos(); p[name] = {x, y}; localStorage.setItem('homeatlas.roompos', JSON.stringify(p)); } catch (e) { /* Position gilt dann nur bis zum Neuladen */ } };
 function ago(t) {
   if (!t) return 'nie';
@@ -492,8 +500,9 @@ function autoLayout(all) {
 function fitView() {
   const cs = [...cards.values()];
   if (!cs.length) return;
-  const x0 = Math.min(...cs.map(c => c.x)), y0 = Math.min(...cs.map(c => c.y));
-  const x1 = Math.max(...cs.map(c => c.x + c.w)), y1 = Math.max(...cs.map(c => c.y + c.h));
+  const bx = viewMode === 'rooms' ? floorBoxes : [], all = [...cs, ...bx];
+  const x0 = Math.min(...all.map(c => c.x)), y0 = Math.min(...all.map(c => c.y));
+  const x1 = Math.max(...all.map(c => c.x + c.w)), y1 = Math.max(...all.map(c => c.y + c.h));
   const W = main.clientWidth, H = main.clientHeight;
   cam.k = Math.min((W - 40) / (x1 - x0), (H - 110) / (y1 - y0), 1.4);
   cam.x = (W - (x1 - x0) * cam.k) / 2 - x0 * cam.k; cam.y = 64 - y0 * cam.k;
@@ -518,15 +527,51 @@ function buildRoomCard(id, name, members, pos) {
 function buildRoomCards(tops) {
   const by = new Map();
   for (const d of tops) { const r = roomOf(d); if (!by.has(r)) by.set(r, []); by.get(r).push(d); }
-  const names = [...by.keys()].sort((a, b) => (a === NOROOM) - (b === NOROOM) || a.localeCompare(b)), pos = roomPos();
+  const fl = floorsSorted(), rank = nm => { const k = floorKey(nm); const i = fl.findIndex(f => f.id === k); return i < 0 ? fl.length : i; };
+  if (floorFilter != null && fl.length) for (const nm of [...by.keys()]) if (floorKey(nm) !== floorFilter) by.delete(nm);
+  const names = [...by.keys()].sort((a, b) => rank(a) - rank(b) || (a === NOROOM) - (b === NOROOM) || a.localeCompare(b)), pos = roomPos();
   roomIds = new Map(names.map((nm, i) => [nm, -(i + 1)]));
   cards = new Map(names.map(nm => [roomIds.get(nm), buildRoomCard(roomIds.get(nm), nm, by.get(nm), pos[nm])]));
-  let x = 60, y = 70, rowH = 0;                       // Räume ohne gemerkte Position: zeilenweise anordnen
-  for (const c of cards.values()) {
-    if (c.x != null) continue;
-    if (x > 60 && x + c.w > 2500) { x = 60; y += rowH + 90; rowH = 0; }
-    c.x = x; c.y = y; x += c.w + 80; rowH = Math.max(rowH, c.h);
+  // Räume ohne gemerkte Position: je Etage ein Band von oben nach unten, darin zeilenweise
+  // Mit Etagen: kommt ein Raum ohne Position dazu, alle neu anordnen, sonst überlappen sich die Bänder
+  const fresh = fl.length && [...cards.values()].some(c => c.x == null);
+  if (fresh) for (const c of cards.values()) { c.x = null; c.y = null; }
+  const bands = fl.length ? [...fl.map(f => f.id), 0] : [null];
+  let y = 70;
+  for (const b of bands) {
+    const cs = [...cards.values()].filter(c => b === null || floorKey(c.room) === b);
+    if (!cs.length) continue;
+    const placed = cs.filter(c => c.x != null);
+    if (placed.length) y = Math.max(y, Math.max(...placed.map(c => c.y + c.h)) + 140);
+    let x = 60, rowH = 0, any = false;
+    for (const c of cs) {
+      if (c.x != null) continue;
+      if (x > 60 && x + c.w > 2500) { x = 60; y += rowH + 90; rowH = 0; }
+      c.x = x; c.y = y; x += c.w + 80; rowH = Math.max(rowH, c.h); any = true;
+    }
+    if (any) y += rowH + 140;
   }
+  if (fresh && floorFilter == null) try {             // neue Anordnung merken, damit Verschieben danach erhalten bleibt
+    const p = roomPos(); for (const c of cards.values()) p[c.room] = {x: c.x, y: c.y};
+    localStorage.setItem('homeatlas.roompos', JSON.stringify(p));
+  } catch (e) { /* gilt dann nur bis zum Neuladen */ }
+}
+// Hintergrund je Etage: Rahmen um alle Räume der Etage mit Beschriftung
+function floorsSvg() {
+  floorBoxes = [];
+  if (viewMode !== 'rooms' || !(S.floors || []).length) return '';
+  let s = '';
+  for (const f of [...floorsSorted(), {id: 0, name: NOFLOOR}]) {
+    const cs = [...cards.values()].filter(c => floorKey(c.room) === f.id);
+    if (!cs.length) continue;
+    const x0 = Math.min(...cs.map(c => c.x)) - 30, y0 = Math.min(...cs.map(c => c.y)) - 62;
+    const x1 = Math.max(...cs.map(c => c.x + c.w)) + 30, y1 = Math.max(...cs.map(c => c.y + c.h)) + 30;
+    floorBoxes.push({x: x0, y: y0, w: x1 - x0, h: y1 - y0});
+    s += `<g class="floor" data-floor="${f.id}"><rect x="${x0}" y="${y0}" width="${x1 - x0}" height="${y1 - y0}" rx="18" fill="${f.id ? 'rgba(120,150,190,.06)' : 'rgba(120,120,120,.04)'}" stroke="${f.id ? 'rgba(120,150,190,.35)' : 'rgba(140,140,140,.3)'}" stroke-dasharray="${f.id ? '0' : '6 6'}"/>` +
+      T(x0 + 20, y0 + 30, f.name, {size: 18, weight: 700, fill: f.id ? PAL.TEXT || '#e6edf3' : PAL.MUTED}) +
+      T(x0 + 26 + tw(f.name, 18, 700), y0 + 30, `\u00a0·\u00a0Etage · ${cs.length} ${cs.length === 1 ? 'Raum' : 'Räume'}`, {size: 12.5, fill: PAL.MUTED}) + '</g>';
+  }
+  return s;
 }
 function toggleMulti(id) {
   if (!dev(id)) return;
@@ -562,14 +607,16 @@ function renderTopo() {
     if ([...cards.values()].some(c => c.x == null)) autoLayout([...cards.values()].every(c => c.x == null));
   }
   const marker = (id, c) => `<marker id="arr-${id}" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="${c}"/></marker>`;
-  main.innerHTML = `<svg id="svg"><defs>${Object.entries(LK).filter(([, v]) => v.style === 'arrow').map(([k, v]) => marker(k, v.col)).join('')}</defs><g id="world" class="world"><g id="links">${linksSvg()}</g>` +
+  main.innerHTML = `<svg id="svg"><defs>${Object.entries(LK).filter(([, v]) => v.style === 'arrow').map(([k, v]) => marker(k, v.col)).join('')}</defs><g id="world" class="world"><g id="floors">${floorsSvg()}</g><g id="links">${linksSvg()}</g>` +
     `<g id="cards">${[...cards.values()].map(cardNode).join('')}</g></g></svg>` +
-    `<div id="vbar">${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
+    `<div id="vbar">${viewMode === 'rooms' && (S.floors || []).length ? `<button class="vp fp${floorFilter == null ? ' on' : ''}" data-act="floorFilter" data-id="">Alle Etagen</button>` +
+      floorsSorted().map(f => `<button class="vp fp${floorFilter === f.id ? ' on' : ''}" data-act="floorFilter" data-id="${f.id}">${esc(f.name)}</button>`).join('') + '<span class="vsep"></span>' : ''}${S.vlans.map(v => `<button class="vp${vfilter === v.id ? ' on' : ''}" style="border-left-color:${esc(v.color)}" data-act="vfilter" data-id="${v.id}">${esc(vtag(v))}${v.vid != null ? ' · ' + esc(v.name) : ''}</button>`).join('')}</div>` +
     `<div id="legend"><i style="height:8px"></i><span>10G</span><i style="height:3.8px"></i><span>2.5G</span><i style="height:2.4px"></i><span>1G</span>` +
     `<i class="tr"></i><span>Trunk (tagged)</span><i class="wl"></i><span>WLAN</span><i class="ap"></i><span>API (Pfeil = fragt ab)</span><i class="lg"></i><span>logisch</span>` +
     [...new Set([...S.links.map(l => l.kind), ...S.devices.map(d => (d.meta || {}).proto)])].filter(k => LK[k] && (LK[k].home || k === 'wan')).map(k => `<i class="lk ${LK[k].style}" style="--c:${LK[k].col}"></i><span>${esc(LK[k].short)}</span>`).join('') + '</div>' +
     `<div id="tsearch">${searchBox('topoq', '', 'Gerät suchen …')}<div id="tres" hidden></div></div>` +
-    `<div id="tools"><span class="seg"><button class="btn${viewMode === 'normal' ? ' on' : ''}" data-act="viewMode" data-m="normal">Normal</button><button class="btn${viewMode === 'rooms' ? ' on' : ''}" data-act="viewMode" data-m="rooms">Räume</button></span><button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
+    `<div id="tools"><span class="seg"><button class="btn${viewMode === 'normal' ? ' on' : ''}" data-act="viewMode" data-m="normal">Normal</button><button class="btn${viewMode === 'rooms' ? ' on' : ''}" data-act="viewMode" data-m="rooms">Räume</button></span>` +
+    (viewMode === 'rooms' ? '<button class="btn" data-act="floors">Etagen</button>' : '') + `<button class="btn" data-act="newDevice">+ Gerät</button><button class="btn" data-act="newGroup">+ Bereich</button><button class="btn${selMode ? ' pri' : ''}" data-act="selMode" title="Auch: Strg/Umschalt + Klick">${selMode ? 'Auswahl beenden' : 'Auswählen'}</button><button class="btn" data-act="relayout">Auto-Layout</button>` +
     `<button class="btn" data-act="fit">Einpassen</button><button class="btn" data-act="svgExport">SVG</button></div>`;
   if (!camSet) { fitView(); camSet = true; } else applyCam();
   bindCanvas();
@@ -648,6 +695,7 @@ function bindCanvas() {
     else if (mode === 'card') {
       card.x = Math.round(start[2] + dx / cam.k); card.y = Math.round(start[3] + dy / cam.k);
       card.node.setAttribute('transform', `translate(${card.x},${card.y})`);
+      if (viewMode === 'rooms' && $('#floors')) $('#floors').innerHTML = floorsSvg();
       $('#links').innerHTML = linksSvg(); focusSel();
     }
   });
@@ -681,7 +729,7 @@ function bindCanvas() {
     } else if (!moved) {
       const t = start.target, chip = t.closest('.chip'), cn = t.closest('.card'), ln = t.closest('.link');
       if ((selMode || e.ctrlKey || e.metaKey || e.shiftKey) && (chip || cn) && !ro()) toggleMulti(+(chip || cn).dataset.id);
-      else if (chip) showDevice(+chip.dataset.id); else if (cn) showDevice(+cn.dataset.id);
+      else if (chip) showDevice(+chip.dataset.id); else if (cn && +cn.dataset.id < 0) showRoom(cards.get(+cn.dataset.id).room); else if (cn) showDevice(+cn.dataset.id);
       else if (ln) showLink(+ln.dataset.link); else closePanel();
     }
     mode = null;
@@ -695,6 +743,43 @@ function openPanel(html, mode) { panel.innerHTML = html; panel.hidden = false; p
 const closeBtn = '<button class="x" data-act="close" aria-label="Schließen">×</button>';
 function fact(k, v) { return v ? `<dt>${k}</dt><dd>${v}</dd>` : ''; }
 
+// Räume, die irgendwo vorkommen: an Geräten, Racks oder schon mit Etage gespeichert
+const knownRooms = () => [...new Set([...allRooms(), ...(S.rooms || []).map(r => r.name)])].sort((a, b) => a.localeCompare(b));
+const floorSelect = name => `<select data-room="${esc(name)}" class="floorsel inp"${ro() ? ' disabled' : ''}><option value="">${NOFLOOR}</option>` +
+  floorsSorted().map(f => `<option value="${f.id}"${floorKey(name) === f.id ? ' selected' : ''}>${esc(f.name)}</option>`).join('') + '</select>';
+function bindFloorSelects() {
+  panel.querySelectorAll('select.floorsel').forEach(el => el.addEventListener('change', () =>
+    run(async () => { await api('POST', '/api/rooms', {name: el.dataset.room, floor_id: el.value === '' ? null : +el.value}); dropRoomPos([el.dataset.room]); await load(); panelMode === 'room' ? showRoom(el.dataset.room) : showFloors(); }, 'Etage gespeichert')));
+}
+function showRoom(name) {
+  if (!name) return closePanel();
+  sel = null; focusSel();
+  const members = S.devices.filter(d => roomEntry(d) && roomOf(d) === name), f = floorOf(name);
+  let h = `<div class="phead"><div><h2>${esc(name)}</h2><span class="muted">Raum${f ? ' · ' + esc(f.name) : ''}</span></div>${closeBtn}</div>`;
+  if (name === NOROOM) h += '<p class="muted">Geräte ohne Raum. Trag bei den Geräten einen Raum ein, damit sie hier verschwinden.</p>';
+  else if ((S.floors || []).length) h += `<h3>Etage</h3><div class="rowl" style="border:0">${floorSelect(name)}<button class="btn sm" data-act="floors">Etagen verwalten</button></div>`;
+  else h += `<p class="muted">Noch keine Etagen angelegt.</p>${ro() ? '' : '<div class="acts"><button class="btn" data-act="floors">Etagen anlegen</button></div>'}`;
+  h += `<h3>Geräte (${members.length})</h3>` + members.map(d => `<div class="rowl"><img src="${icon(d)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${d.id}">${esc(d.name)}</a>` +
+    `<span class="muted" style="margin-left:auto">${esc(TYPES[d.type] || d.type)}</span></div>`).join('');
+  openPanel(h, 'room'); bindFloorSelects();
+}
+function showFloors() {
+  const fl = floorsSorted(), rooms = knownRooms();
+  let h = `<div class="phead"><div><h2>Etagen</h2><span class="muted">oberste zuerst · Räume den Etagen zuordnen</span></div>${closeBtn}</div>`;
+  h += fl.map((f, i) => `<div class="rowl"><input class="inp" data-floor="${f.id}" value="${esc(f.name)}" style="flex:1"${ro() ? ' disabled' : ''}>` +
+    `<span class="muted" style="font-size:12px">${(S.rooms || []).filter(r => r.floor_id === f.id).length} Räume</span>` +
+    (ro() ? '' : `<button class="btn sm" data-act="floorRename" data-id="${f.id}" title="Namen übernehmen">✓</button>` +
+      `<button class="btn sm" data-act="floorMove" data-id="${f.id}" data-dir="-1"${i ? '' : ' disabled'} title="nach oben">↑</button>` +
+      `<button class="btn sm" data-act="floorMove" data-id="${f.id}" data-dir="1"${i < fl.length - 1 ? '' : ' disabled'} title="nach unten">↓</button>` +
+      `<button class="btn sm bad" data-act="floorDel" data-id="${f.id}" title="Etage löschen">×</button>`) + '</div>').join('') ||
+    '<p class="muted">Noch keine Etagen. Typisch sind z. B. Dachgeschoss, Obergeschoss, Erdgeschoss, Keller, Garten.</p>';
+  if (!ro()) h += `<div class="rowl" style="border:0"><input class="inp" id="floornew" placeholder="Neue Etage, z. B. Erdgeschoss" style="flex:1"><button class="btn sm pri" data-act="floorAdd">+ Etage</button></div>`;
+  if (fl.length) h += `<h3>Räume (${rooms.length})</h3>` + (rooms.map(r => `<div class="rowl"><a href="#" data-act="showRoom" data-name="${esc(r)}" style="flex:1">${esc(r)}</a>${floorSelect(r)}</div>`).join('') ||
+    '<p class="muted">Noch keine Räume. Räume trägst du bei Geräten oder als Standort eines Racks ein.</p>');
+  openPanel(h, 'floors'); bindFloorSelects();
+  const ni = $('#floornew'); if (ni) ni.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); ACT.floorAdd(); } });
+  panel.querySelectorAll('input[data-floor]').forEach(i => i.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); ACT.floorRename({id: i.dataset.floor}); } }));
+}
 function showDevice(id, keep) {
   const d = dev(id); if (!d) return closePanel();
   sel = id;
@@ -714,7 +799,7 @@ function showDevice(id, keep) {
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
     fact('MAC', d.mac && `<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) +
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
-    fact('Raum', roomOf(d) !== NOROOM && esc(roomOf(d)) + (d.room ? '' : ' <span class="faint">(übernommen)</span>')) +
+    fact('Raum', roomOf(d) !== NOROOM && esc(roomOf(d)) + (d.room ? '' : ' <span class="faint">(übernommen)</span>') + (floorOf(roomOf(d)) ? ' · ' + esc(floorOf(roomOf(d)).name) : '')) +
     fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Beschreibung', esc(d.note)) +
     fact('Vernetzung', (d.meta || {}).proto && LK[d.meta.proto] && `<span style="color:${LK[d.meta.proto].col}">${esc(LK[d.meta.proto].label)}</span>${d.parent_id && dev(d.parent_id) ? ' über ' + esc(dev(d.parent_id).name) : ''}`) +
     fact('Rack', rack && `${esc(rack.name)} · HE ${d.rack_u}${d.rack_height > 1 ? '–' + (d.rack_u + d.rack_height - 1) : ''}`) +
@@ -1407,6 +1492,18 @@ const ACT = {
     renderTopo(); fitView();
   },
   viewMode: d => { viewMode = d.m; closePanel(); renderTopo(); fitView(); },
+  floorFilter: d => { floorFilter = d.id === '' ? null : +d.id; closePanel(); renderTopo(); fitView(); },
+  floors: () => showFloors(),
+  showRoom: d => showRoom(d.name),
+  floorAdd: () => { const i = $('#floornew'); const name = i && i.value.trim(); if (!name) return toast('Name der Etage fehlt', true);
+    run(async () => { await api('POST', '/api/floors', {name, sort: Math.max(0, ...(S.floors || []).map(f => f.sort || 0)) + 1}); await load(); showFloors(); }, 'Etage angelegt'); },
+  floorRename: d => { const f = S.floors.find(x => x.id === +d.id); const i = $(`input[data-floor="${d.id}"]`); const name = i && i.value.trim();
+    if (!f || !name || name === f.name) return; run(async () => { await api('PUT', '/api/floors/' + f.id, {name}); await load(); showFloors(); }, 'Umbenannt'); },
+  floorMove: d => { const fl = floorsSorted(), i = fl.findIndex(f => f.id === +d.id), j = i + +d.dir; if (i < 0 || j < 0 || j >= fl.length) return;
+    [fl[i], fl[j]] = [fl[j], fl[i]]; dropRoomPos(null); run(async () => { for (const [k, f] of fl.entries()) if (f.sort !== k + 1) await api('PUT', '/api/floors/' + f.id, {sort: k + 1}); await load(); showFloors(); }); },
+  floorDel: d => { const f = S.floors.find(x => x.id === +d.id); if (!f) return; const n = (S.rooms || []).filter(r => r.floor_id === f.id).length;
+    if (!confirm(`Etage „${f.name}“ löschen?${n ? ` ${n} ${n === 1 ? 'Raum steht' : 'Räume stehen'} danach ohne Etage da.` : ''}`)) return;
+    if (floorFilter === f.id) floorFilter = null; run(async () => { await api('DELETE', '/api/floors/' + f.id); dropRoomPos((S.rooms || []).filter(r => r.floor_id === f.id).map(r => r.name)); await load(); showFloors(); }, 'Etage gelöscht'); },
   vfilter: d => { vfilter = vfilter === +d.id ? null : +d.id; renderTopo(); },
   newDevice: d => deviceForm({type: d.parent ? 'container' : 'server', parent_id: d.parent || '', rack_height: 1}),
   editDevice: d => deviceForm(dev(+d.id)),
