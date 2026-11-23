@@ -1,3 +1,4 @@
+name: homeatlas
 services:
   homeatlas:
     build: .
