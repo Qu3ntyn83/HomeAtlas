@@ -59,11 +59,13 @@ KINDS = {
                 "„ReadOnly“ an. Bei „Gehört zu Gerät“ den Server wählen, zu dem der BMC gehört – die IPMI-Adresse wird dann dessen "
                 "zusätzliche Adresse. Ältere Boards (z. B. Supermicro X10) brauchen dafür eine aktuelle BMC-Firmware."},
     "unifi": {"label": "UniFi Network", "fields": [
-        ["host", "Adresse der Konsole/des Controllers (https://192.168.1.1)"], ["port", "Port (UniFi OS 443, klassisch 8443)", "443"],
+        ["host", "Adresse der Konsole/des Controllers (https://192.168.1.1)"], ["port", "Port (leer = automatisch: 443, dann 8443)"],
         ["site", "Standort-ID", "default"], ["api_key", "API-Key (UniFi OS, empfohlen)", "", "password"],
         ["user", "oder: lokaler Benutzer"], ["password", "Passwort", "", "password"],
         ["clients", "Unbekannte Clients als Geräte anlegen (Bereich „UniFi-Clients“)", "", "check"]],
-        "help": "Liest Access Points, Switches und Gateway mit ihren Uplinks sowie die verbundenen Clients. Clients werden vorhandenen "
+        "help": "UniFi OS (UDM, UCG, Cloud Key): Port 443. Selbst betriebene Network Application (z. B. im Docker): Port 8443 – "
+                "nicht 8080, das ist nur der Inform-Port der Geräte. Leer lassen probiert beides. "
+                "Liest Access Points, Switches und Gateway mit ihren Uplinks sowie die verbundenen Clients. Clients werden vorhandenen "
                 "Geräten über MAC oder IP zugeordnet und bekommen ihre Verbindung: per Kabel mit Switch-Port, per WLAN mit SSID zum "
                 "Access Point. Am besten einen API-Key nehmen (UniFi OS: Network → Einstellungen → Control Plane → Integrationen). "
                 "Ohne API-Key einen lokalen Benutzer mit der Rolle „Nur ansehen“ anlegen; Ubiquiti-Konten mit Zwei-Faktor gehen nicht. "
@@ -1195,24 +1197,29 @@ UNIFI_TYPES = {"uap": "ap", "usw": "switch", "ugw": "router", "uxg": "router", "
 
 
 class UniFiClient:
-    """UniFi Network: UniFi OS (UDM, UCG, Cloud Key Gen2+, Network Server ab 8.x) mit API-Key oder Benutzer,
-    klassischer Controller (Port 8443) mit Benutzer. Gelesen wird über die bewährten /stat-Schnittstellen."""
+    """UniFi Network: UniFi OS (UDM, UCG, Cloud Key Gen2+) mit API-Key oder Benutzer, selbst betriebene
+    Network Application (Docker, Port 8443) mit Benutzer oder API-Key. Gelesen wird über die /stat-Schnittstellen.
+    Port leer = automatisch: 443, dann 8443. Port 8080 ist nur der Inform-Port der Geräte – dann wird 8443 versucht."""
 
     def __init__(self, c):
         raw = (c.get("host") or "").strip()
-        self.scheme, self.host, self.port = endpoint(c, 443)
-        if "://" not in raw and str(self.port) == "80":
-            self.scheme = "http"
+        self.explicit = "://" in raw or bool(str(c.get("port") or "").strip()) or ":" in raw
+        self.scheme, self.host, self.port = endpoint({**c, "port": c.get("port") or 443}, 443)
+        self.raw_http = raw.startswith("http://")
         self.site = (c.get("site") or "default").strip() or "default"
         self.key = (c.get("api_key") or "").strip()
         self.user, self.pw = (c.get("user") or "").strip(), c.get("password") or ""
         if not self.key and not (self.user and self.pw):
             raise RuntimeError("API-Key oder Benutzer und Passwort fehlen")
-        self.base = f"{self.scheme}://{self.host}:{self.port}"
+        self.csrf, self.prefix, self.os = None, "", True
+
+    def _use(self, scheme, port):
+        self.scheme, self.port = scheme, int(port)
+        self.base = f"{scheme}://{self.host}:{port}"
         self.jar = http.cookiejar.CookieJar()
         self.op = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_CTX),
                                               urllib.request.HTTPCookieProcessor(self.jar))
-        self.csrf, self.prefix, self.os = None, "", True
+        self.csrf = None
 
     def _req(self, method, path, body=None):
         h = {"Accept": "application/json"}
@@ -1230,29 +1237,75 @@ class UniFiClient:
         try:
             return json.loads(txt)
         except ValueError:
-            raise RuntimeError("UniFi: unerwartete Antwort – ist das die Adresse der UniFi-Konsole bzw. des Controllers?") from None
+            raise RuntimeError("UniFi: unerwartete Antwort – ist das die Adresse der UniFi-Konsole bzw. der Network Application?") from None
 
-    def login(self):
-        reach(self.host, self.port)
-        if self.key:                                  # API-Key gibt es nur unter UniFi OS
-            self.prefix = "/proxy/network"
-            return
+    def _candidates(self):
+        """Welche Kombinationen aus Schema und Port probiert werden, in dieser Reihenfolge."""
+        out = []
+        if self.explicit:
+            out.append((self.scheme, self.port))
+            if int(self.port) in (8080, 443):         # 8080 ist der Inform-Port, 443 der Standard von UniFi OS
+                out.append(("https", 8443))
+            if self.scheme == "https" and not self.raw_http:
+                out.append(("http", self.port))       # z. B. hinter einem Proxy ohne TLS
+        else:
+            out += [("https", 443), ("https", 8443)]
+        return list(dict.fromkeys(out))
+
+    def _try_login(self):
+        if self.key:
+            for prefix, is_os in (("/proxy/network", True), ("", False)):    # UniFi OS, dann selbst betrieben
+                try:
+                    self._req("GET", f"{prefix}/api/s/{urllib.parse.quote(self.site)}/stat/sysinfo")
+                    self.prefix, self.os = prefix, is_os
+                    return
+                except urllib.error.HTTPError as e:
+                    if e.code in (401, 403):
+                        raise RuntimeError("UniFi: API-Key abgelehnt – Schlüssel prüfen (Network → Einstellungen → "
+                                           "Control Plane → Integrationen)") from None
+                    if e.code != 404:
+                        raise RuntimeError(explain(e, "UniFi")) from None
+            raise RuntimeError(f"UniFi: Standort „{self.site}“ nicht gefunden – die Standort-ID steht in der Adresszeile "
+                               "der Weboberfläche (…/manage/<ID>/…), meist „default“") from None
         try:
             self._req("POST", "/api/auth/login", {"username": self.user, "password": self.pw, "rememberMe": False})
-            self.prefix = "/proxy/network"
+            self.prefix, self.os = "/proxy/network", True
+            return
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen. Es muss ein lokales Konto sein, "
                                    "Ubiquiti-Konten mit Zwei-Faktor gehen nicht") from None
             if e.code not in (404, 405):
                 raise RuntimeError(explain(e, "UniFi")) from None
-            try:                                      # klassischer Controller
-                self._req("POST", "/api/login", {"username": self.user, "password": self.pw})
-                self.prefix, self.os = "", False
-            except urllib.error.HTTPError as e2:
-                if e2.code in (400, 401, 403):
-                    raise RuntimeError("UniFi: Anmeldung am Controller abgelehnt – Benutzer/Passwort prüfen") from None
-                raise RuntimeError(explain(e2, "UniFi")) from None
+        try:                                          # selbst betriebene Network Application / klassischer Controller
+            self._req("POST", "/api/login", {"username": self.user, "password": self.pw})
+            self.prefix, self.os = "", False
+        except urllib.error.HTTPError as e2:
+            if e2.code in (400, 401, 403):
+                raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen (lokales Konto, ohne Zwei-Faktor)") from None
+            raise RuntimeError(explain(e2, "UniFi")) from None
+
+    def login(self):
+        tried = []
+        for scheme, port in self._candidates():
+            self._use(scheme, port)
+            try:
+                reach(self.host, port, timeout=3)
+                self._try_login()
+                return
+            except RuntimeError as e:
+                if str(e).startswith("UniFi:") or "fehlen" in str(e):
+                    raise                             # Gegenstelle erreicht, aber Anmeldung oder Standort falsch
+                tried.append(f"{scheme}://…:{port} ({str(e).split(' – ')[0].split('. ')[0]})")
+            except urllib.error.URLError as e:
+                r = e.reason
+                why = "spricht kein HTTPS" if isinstance(r, ssl.SSLError) else str(r)
+                tried.append(f"{scheme}://…:{port} ({why})")
+            except (ssl.SSLError, OSError) as e:
+                tried.append(f"{scheme}://…:{port} ({'spricht kein HTTPS' if isinstance(e, ssl.SSLError) else e})")
+        hint = (" Die selbst betriebene Network Application (Docker) hat ihre Weboberfläche auf 8443, Port 8080 ist nur für die Geräte."
+                if any(":8080" in t for t in tried) or not self.explicit else "")
+        raise RuntimeError("UniFi: keine Weboberfläche gefunden. Versucht: " + "; ".join(tried) + "." + hint)
 
     def get(self, what):
         try:
@@ -1370,6 +1423,10 @@ def sync_unifi(integ):
         cli.logout()
     data = unifi_parse(devices, clients, wlans)
     url = f"{cli.scheme}://{cli.host}:{cli.port}"
+    found = ""
+    if cli.scheme == "https" and str(c.get("port") or "") != str(cli.port):   # gefundenen Port merken
+        db.update("integrations", integ["id"], {"config": {**c, "port": str(cli.port)}})
+        found = f" · Port {cli.port} gefunden und gespeichert"
     now = db.now()
     ids, seen = {}, set()
     for d in data["infra"]:
@@ -1464,7 +1521,7 @@ def sync_unifi(integ):
     rest = len(data["clients"]) - matched - new
     return (f"{len(data['infra'])} UniFi-Geräte ({aps} APs, {sws} Switches{f', {off} offline' if off else ''}), "
             f"{len(data['clients'])} Clients: {matched} zugeordnet" + (f", {new} angelegt" if new else "") +
-            (f", {rest} unbekannt" if rest and not create else "") + f" · {made} neue Verbindungen")
+            (f", {rest} unbekannt" if rest and not create else "") + f" · {made} neue Verbindungen" + found)
 
 
 SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap, "synology": sync_synology, "ipmi": sync_ipmi,
