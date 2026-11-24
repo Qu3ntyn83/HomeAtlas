@@ -38,6 +38,7 @@ _CTX.check_hostname = False
 _CTX.verify_mode = ssl.CERT_NONE
 _OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_CTX))
 _seq = [0]
+_seq_lock = threading.Lock()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS checks(
@@ -71,8 +72,10 @@ def _checksum(data):
 def ping(host, timeout=2.0):
     """ICMP-Echo ohne externes Programm. Braucht NET_RAW (Docker-Standard im Host-Netz) oder erlaubte Ping-Sockets."""
     addr = socket.gethostbyname(host)
-    _seq[0] = (_seq[0] + 1) % 65000
-    ident, seq = os.getpid() & 0xFFFF, _seq[0]
+    with _seq_lock:                                   # Checks laufen parallel: jede Anfrage bekommt eine eigene Nummer
+        _seq[0] = (_seq[0] + 1) % 65000
+        seq = _seq[0]
+    ident = os.getpid() & 0xFFFF
     payload = struct.pack("!d", time.time()) + b"homeatlas-ping-01"
     head = struct.pack("!BBHHH", 8, 0, 0, ident, seq)
     packet = struct.pack("!BBHHH", 8, 0, _checksum(head + payload), ident, seq) + payload
@@ -94,7 +97,10 @@ def ping(host, timeout=2.0):
                     break
                 # Raw-Sockets liefern den IP-Kopf mit, dessen Länge steht im IHL-Feld
                 body = data[(data[0] & 0x0F) * 4:] if kind == socket.SOCK_RAW and data else data
-                if peer[0] == addr and len(body) >= 8 and body[0] == 0 and struct.unpack("!H", body[6:8])[0] == seq:
+                # Raw-Sockets sehen alle ICMP-Antworten, auch die anderer Programme: Kennung mitprüfen.
+                # Ping-Sockets (DGRAM) setzen die Kennung selbst und filtern schon im Kernel.
+                if peer[0] == addr and len(body) >= 8 and body[0] == 0 and struct.unpack("!H", body[6:8])[0] == seq \
+                        and (kind != socket.SOCK_RAW or struct.unpack("!H", body[4:6])[0] == ident):
                     return (time.time() - t0) * 1000
             raise TimeoutError("keine Antwort auf Ping")
     raise RuntimeError(f"Ping nicht möglich ({last}) – dem Container fehlt NET_RAW")

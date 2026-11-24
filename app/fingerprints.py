@@ -39,7 +39,7 @@ def identify(h):
                 out[k] = v
 
     def has(*words):
-        return any(w in titles for w in words)
+        return any(w in titles or w in servers for w in words)     # Seitentitel und Server-Kopfzeile
 
     def web(port):
         return f"{'https' if port in TLS_PORTS else 'http'}://{ip}:{port}"

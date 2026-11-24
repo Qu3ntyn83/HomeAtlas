@@ -160,12 +160,15 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 
 - **Export/Wiederherstellung** (Admin) als JSON: Geräte, Kabel, Racks, Netzwerke, WLANs, Anbindungen, Checks, Menü-Links, Gerätetypen,
   eigene Icons, Einstellungen; ältere Exporte bleiben einspielbar
+- **Automatische Sicherungen** (Admin) unter *System*: täglich zur eingestellten Stunde, dazu vor jedem Update und vor jedem Wiederherstellen;
+  Datenbank (konsistent per SQLite-Backup) und eigene Icons als `.tar.gz` in `data/backups`, Anzahl einstellbar (Standard 14), herunterladen und löschen
 - **Import** einer `inventory.yaml` aus homelab-diagram
 - CSV-Export der Adress-Tabelle, SVG-Export der Topologie, Gatus-YAML der Checks
 
 ## Technik
 
 - Ein Docker-Container: Python 3.12, FastAPI, SQLite (WAL), Oberfläche in reinem JavaScript ohne Build-Schritt
+- Die Oberfläche fragt alle 15 Sekunden mit einem Fingerabdruck nach und zeichnet nur neu, wenn sich etwas geändert hat
 - nmap und net-snmp im Image; Host-Netz mit `NET_RAW` für ARP und Ping
 - Daten in `./data` (Datenbank, Icon-Zwischenspeicher, hochgeladene Icons)
 

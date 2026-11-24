@@ -15,7 +15,7 @@ def env(key, default=""):
 DATA = Path(env("DATA", "/data"))
 DB = DATA / "homeatlas.db"
 _OLD = DATA / "labvis.db"
-if not DB.exists() and _OLD.exists():                 # Umbenennung HomeAtlas → HomeAtlas: Datenbank übernehmen
+if not DB.exists() and _OLD.exists():                 # Umbenennung LabVis → HomeAtlas: Datenbank übernehmen
     for ext in ("", "-wal", "-shm"):
         if Path(str(_OLD) + ext).exists():
             Path(str(_OLD) + ext).rename(str(DB) + ext)
@@ -84,7 +84,8 @@ COLUMNS = {
     "integrations": ["kind", "name", "device_id", "config", "enabled"],
 }
 DEFAULTS = {"scan_interval_min": "60", "sync_interval_min": "15", "snmp_community": "public",
-            "title": "HomeAtlas", "notify_url": "", "dns_domain": ""}
+            "title": "HomeAtlas", "notify_url": "", "dns_domain": "",
+            "backup_enabled": "1", "backup_hour": "3", "backup_keep": "14"}
 
 
 def conn():

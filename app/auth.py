@@ -6,13 +6,12 @@ Rechte:  read  – alles ansehen
 """
 import hashlib
 import hmac
-import os
 import secrets
 import time
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from . import db
 
@@ -23,7 +22,7 @@ MIN_LEN = 10
 PUBLIC = {"/healthz", "/login", "/api/auth/status", "/api/auth/login", "/api/auth/setup"}
 ROLES = ("read", "write", "admin")
 SELF_SERVICE = {"/api/auth/logout", "/api/auth/password"}          # darf jedes Konto
-ADMIN_ONLY = ("/api/auth/users", "/api/export", "/api/restore", "/api/settings/save")
+ADMIN_ONLY = ("/api/auth/users", "/api/export", "/api/restore", "/api/settings/save", "/api/backups")
 _fails = {}          # ip -> [anzahl, gesperrt_bis]
 router = APIRouter(prefix="/api/auth")
 
