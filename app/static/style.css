@@ -124,6 +124,8 @@ select.floorsel{min-width:150px;padding:4px 8px}
   display:flex;align-items:center;justify-content:center;opacity:.55}
 .ports div.up{opacity:1;color:var(--text)}
 .ports div.nb{box-shadow:0 0 0 1.5px var(--text)}
+.ports.pp div{cursor:pointer}.ports.pp div.up{background:#1f3a2a;border-color:var(--ok)}.ports.pp div:hover{border-color:var(--link)}
+.pports i.u{background:var(--ok);border-color:var(--ok)}
 .rowl{display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px}
 .rowl:last-child{border:0}
 .bar2{height:6px;border-radius:3px;background:#1d2734;overflow:hidden;margin:4px 0}

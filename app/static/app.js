@@ -630,7 +630,7 @@ function renderTopo() {
   focusSel();
   $('#topoq').addEventListener('input', e => {
     const q = e.target.value, box = $('#tres');
-    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => [a.ip, a.label, a.note].join(' ')).join(' '))).slice(0, 10) : [];
+    const hits = q.trim() ? S.devices.filter(d => match(q, d.name, d.ip, d.hostname, d.mac, d.vendor, d.model, d.note, d.room, TYPES[d.type], addrsOf(d).map(a => [a.ip, a.label, a.note].join(' ')).join(' '), ppRefs(d.id).map(r => `${r.pp.name} ${r.e.label || ''}`).join(' '))).slice(0, 10) : [];
     box.hidden = !q.trim();
     box.innerHTML = hits.map(d => `<button data-act="jump" data-id="${d.id}"><img src="${icon(d)}" width="18" height="18" alt=""><b>${esc(d.name)}</b><span class="mono">${esc(d.ip || '')}</span></button>`).join('') ||
       '<span class="muted" style="padding:8px 10px;display:block">Keine Treffer</span>';
@@ -758,6 +758,33 @@ function bindFloorSelects() {
   panel.querySelectorAll('select.floorsel').forEach(el => el.addEventListener('change', () =>
     run(async () => { await api('POST', '/api/rooms', {name: el.dataset.room, floor_id: el.value === '' ? null : +el.value}); dropRoomPos([el.dataset.room]); await load(); panelMode === 'room' ? showRoom(el.dataset.room) : showFloors(); }, 'Etage gespeichert')));
 }
+// Patchpanel-Ports: meta.pp = {"7": {label, dev, sw, sw_port, note}} – hinten die Dose/das Ziel, vorne der Switch-Port
+const ppMap = d => ((d && d.meta) || {}).pp || {};
+const ppN = d => Math.min(96, Math.max(1, +((d.meta || {}).ports_n) || 24));
+const ppUsed = e => !!(e && (e.label || e.dev || e.sw || e.note));
+const ppTitle = (n, e) => [`Port ${n}`, e.label, e.dev && dev(e.dev) ? '→ ' + dev(e.dev).name : '', e.sw && dev(e.sw) ? `Switch: ${dev(e.sw).name}${e.sw_port ? ' ' + e.sw_port : ''}` : '', e.note].filter(Boolean).join(' · ');
+function ppRefs(id) {
+  const out = [];
+  for (const p of S.devices) if (p.type === 'patchpanel') for (const [port, e] of Object.entries(ppMap(p)))
+    if (e && (e.dev === id || e.sw === id)) out.push({pp: p, port: +port, e, via: e.dev === id ? 'dev' : 'sw'});
+  return out.sort((a, b) => a.pp.name.localeCompare(b.pp.name) || a.port - b.port);
+}
+function ppSection(d) {
+  const pm = ppMap(d), n = ppN(d), used = Array.from({length: n}, (_, i) => i + 1).filter(k => ppUsed(pm[k]));
+  let h = `<h3>Ports (${used.length}/${n} belegt)</h3><div class="ports pp">` + Array.from({length: n}, (_, i) => {
+    const e = pm[i + 1];
+    return `<div class="${ppUsed(e) ? 'up' : ''}" ${ro() ? '' : `data-act="ppPort" data-id="${d.id}" data-port="${i + 1}" role="button" tabindex="0"`} title="${esc(ppUsed(e) ? ppTitle(i + 1, e) : `Port ${i + 1} · frei`)}">${i + 1}</div>`;
+  }).join('') + '</div>';
+  if (used.length) h += '<div style="margin-top:8px">' + used.map(k => { const e = pm[k], t = e.dev && dev(e.dev), sw = e.sw && dev(e.sw);
+    return `<div class="rowl"><b class="mono" style="min-width:2.2em">${k}</b><span style="flex:1;min-width:0">${esc(e.label || '')}` +
+      (t ? `${e.label ? ' · ' : ''}<a href="#" data-act="show" data-id="${t.id}">${esc(t.name)}</a>` : '') +
+      (sw ? `<br><span class="muted" style="font-size:12px">Switch <a href="#" data-act="show" data-id="${sw.id}">${esc(sw.name)}</a>${e.sw_port ? ' · ' + esc(e.sw_port) : ''}</span>` : '') +
+      (e.note ? `<br><span class="muted" style="font-size:12px">${esc(e.note)}</span>` : '') + '</span>' +
+      (ro() ? '' : `<button class="btn sm" data-act="ppPort" data-id="${d.id}" data-port="${k}" aria-label="Port ${k} bearbeiten">✎</button>`) + '</div>'; }).join('') + '</div>';
+  if (!ro()) h += `<div class="acts"><button class="btn sm" data-act="ppBulk" data-id="${d.id}">Beschriftungen als Liste</button><button class="btn sm" data-act="ppPorts" data-id="${d.id}">Portanzahl ändern</button></div>`;
+  return h;
+}
+function ppSave(d, pm) { return api('PUT', '/api/devices/' + d.id, {meta: {pp: pm}}); }
 function showRoom(name) {
   if (!name) return closePanel();
   sel = null; focusSel();
@@ -806,6 +833,7 @@ function showDevice(id, keep) {
     `<dl class="facts">${fact('IP', d.ip && `<span class="mono">${esc(d.ip)}</span>`)}${fact('Hostname', d.hostname && `<span class="mono">${esc(d.hostname)}</span>`)}` +
     fact('MAC', d.mac && `<span class="mono">${esc(d.mac)}</span>${d.vendor ? ' · ' + esc(d.vendor) : ''}`) +
     fact('Netzwerk', v && `<span style="color:${esc(v.color)}">${esc(v.vid != null ? vtag(v) + ' · ' + v.name : v.name)}</span>`) +
+    fact('Patchpanel', ppRefs(id).map(r => `<a href="#" data-act="show" data-id="${r.pp.id}">${esc(r.pp.name)}</a> Port ${r.port}${r.e.label ? ' · ' + esc(r.e.label) : ''}${r.via === 'sw' && r.e.dev && dev(r.e.dev) ? ' → ' + esc(dev(r.e.dev).name) : ''}`).join('<br>')) +
     fact('Raum', roomOf(d) !== NOROOM && esc(roomOf(d)) + (d.room ? '' : ' <span class="faint">(übernommen)</span>') + (floorOf(roomOf(d)) ? ' · ' + esc(floorOf(roomOf(d)).name) : '')) +
     fact('Modell', esc(d.model)) + fact('System', esc(d.os)) + fact('Beschreibung', esc(d.note)) +
     fact('Vernetzung', (d.meta || {}).proto && LK[d.meta.proto] && `<span style="color:${LK[d.meta.proto].col}">${esc(LK[d.meta.proto].label)}</span>${d.parent_id && dev(d.parent_id) ? ' über ' + esc(dev(d.parent_id).name) : ''}`) +
@@ -833,7 +861,7 @@ function showDevice(id, keep) {
   if (d.type === 'shelf') h += `<h3>Auf diesem Boden (${onShelf(id).length})</h3>` + (onShelf(id).map(x => `<div class="rowl"><img src="${icon(x)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${x.id}">${esc(x.name)}</a>` +
     `<button class="btn sm" style="margin-left:auto" data-act="shelfRemove" data-id="${x.id}" aria-label="Vom Boden nehmen">✕</button></div>`).join('') || '<span class="muted">leer</span>') +
     `<div class="acts"><button class="btn sm pri" data-act="shelfAdd" data-id="${id}">Gerät daraufstellen</button></div>`;
-  if (d.type === 'patchpanel') h += `<dl class="facts">${fact('Ports', String((m.ports_n) || 24))}</dl><div class="acts"><button class="btn sm" data-act="ppPorts" data-id="${id}">Portanzahl ändern</button></div>`;
+  if (d.type === 'patchpanel') h += ppSection(d);
   if (ssidsOf(id).length) h += `<h3>WLANs (${ssidsOf(id).length})</h3>` + ssidsOf(id).map(w => { const wv = vlan(w.vlan_id);
     return `<div class="rowl"><b class="mono">${esc(w.ssid)}</b>${wv ? `<span style="color:${esc(wv.color)};font-size:12px">${esc(wv.vid != null ? vtag(wv) + ' · ' + wv.name : wv.name)}</span>` : ''}` +
       `<span class="muted" style="margin-left:auto;font-size:12px">${esc([w.band, w.security].filter(Boolean).join(' · '))}</span><button class="btn sm" data-act="editWlan" data-id="${w.id}">✎</button></div>`; }).join('');
@@ -999,8 +1027,10 @@ function rackBlock(d, r) {
   const hh = d.rack_height || 1, pos = `top:${(r.units - (d.rack_u + hh - 1)) * UH + 1}px;height:${hh * UH - 2}px`;
   if (d.type === 'patchpanel') {
     const n = Math.min(96, Math.max(0, +(d.meta || {}).ports_n || 24)), perRow = hh > 1 && n > 24 ? Math.ceil(n / 2) : n;
-    return `<div class="rdev ph pp" data-id="${d.id}" style="${pos}" title="${esc(d.name)} · ${n} Ports"><b>${esc(d.name)}</b>` +
-      `<span class="pports" style="grid-template-columns:repeat(${perRow},1fr)">${'<i></i>'.repeat(n)}</span></div>`;
+    const pm = ppMap(d), used = Object.keys(pm).filter(k => ppUsed(pm[k])).length;
+    return `<div class="rdev ph pp" data-id="${d.id}" style="${pos}" title="${esc(d.name)} · ${n} Ports${used ? ` · ${used} belegt` : ''}"><b>${esc(d.name)}</b>` +
+      `<span class="pports" style="grid-template-columns:repeat(${perRow},1fr)">${Array.from({length: n}, (_, i) => { const e = pm[i + 1];
+        return ppUsed(e) ? `<i class="u" title="${esc(ppTitle(i + 1, e))}"></i>` : '<i></i>'; }).join('')}</span></div>`;
   }
   if (d.type === 'shelf') {
     const on = onShelf(d.id);
@@ -1203,6 +1233,39 @@ function vlanForm(v, after) {
 }
 
 // ------------------------------------------------------------ Funde
+// „Nicht mehr gesehen“: Geräte mit letzter Sichtung vor mehr als N Tagen. Nie gesehene (nur dokumentierte) zählen nicht.
+const staleDays = () => { try { return +localStorage.getItem('homeatlas.staledays') || 30; } catch (e) { return 30; } };
+function staleList() {
+  const lim = S.now - staleDays() * 86400;
+  const devs = S.devices.filter(d => d.last_seen && d.last_seen < lim && d.status !== 'online' && d.type !== 'group' && !PASSIVE.has(d.type))
+    .sort((a, b) => a.last_seen - b.last_seen);
+  const kept = devs.filter(d => (d.meta || {}).stale_keep), open = devs.filter(d => !(d.meta || {}).stale_keep);
+  const finds = S.discoveries.filter(d => d.last_seen && d.last_seen < lim).sort((a, b) => a.last_seen - b.last_seen);
+  return {open, kept, finds};
+}
+function staleHtml() {
+  const {open, kept, finds} = staleList(), days = staleDays(), w = !ro();
+  const kids = d => S.devices.filter(x => x.parent_id === d.id).length;
+  const row = (d, keep) => `<div class="rowl"><img src="${icon(d)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${d.id}">${esc(d.name)}</a>` +
+    `<span class="mono muted" style="font-size:12px">${esc(d.ip || d.mac || '')}</span><span class="muted" style="font-size:12px">zuletzt gesehen: ${ago(d.last_seen)}` +
+    `${d.source && d.source !== 'manual' ? ' · ' + esc((S.kinds[d.source] || {}).label || d.source) : ''}${kids(d) ? ` · ${kids(d)} darunter` : ''}</span>` +
+    (w ? `<span style="margin-left:auto;display:flex;gap:6px">${keep ? `<button class="btn sm" data-act="staleDo" data-op="unkeep" data-id="${d.id}">Wieder prüfen</button>` :
+      `<button class="btn sm" data-act="staleDo" data-op="keep" data-id="${d.id}" title="Nicht mehr als veraltet zeigen, z. B. bei Saisongeräten">Behalten</button>`}` +
+      `<button class="btn sm bad" data-act="staleDo" data-op="delete" data-id="${d.id}">Löschen</button></span>` : '') + '</div>';
+  let h = `<h3 class="faint" style="margin-top:26px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">Nicht mehr gesehen (${open.length})` +
+    `<select id="staledays" class="inp" style="font-size:12.5px;padding:3px 6px;width:auto;flex:0 0 auto">${[7, 14, 30, 60, 90, 180].map(n => `<option value="${n}"${n === days ? ' selected' : ''}>seit über ${n} Tagen</option>`).join('')}</select>` +
+    (w && open.length > 1 ? `<button class="btn sm bad" data-act="staleDo" data-op="delete" data-id="all">Alle ${open.length} löschen</button>` : '') + '</h3>';
+  h += open.length ? `<div class="box">${open.map(d => row(d, false)).join('')}</div>` :
+    `<div class="hint">Alle Geräte, die schon einmal gesehen wurden, waren in den letzten ${days} Tagen erreichbar. Nur dokumentierte Geräte ohne Sichtung zählen nicht.</div>`;
+  if (kept.length) h += `<details style="margin-top:8px"><summary class="muted">Behalten trotz langer Abwesenheit (${kept.length})</summary><div class="box">${kept.map(d => row(d, true)).join('')}</div></details>`;
+  if (finds.length) h += `<div class="hint" style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span>${finds.length} ${finds.length === 1 ? 'Fund wurde' : 'Funde wurden'} seit über ${days} Tagen nicht mehr gesehen.</span>` +
+    (w ? `<button class="btn sm" data-act="staleDo" data-op="discard" data-id="all">Verwerfen</button>` : '') + '</div>';
+  return h;
+}
+function bindStale() {
+  const el = $('#staledays'); if (!el) return;
+  el.onchange = () => { try { localStorage.setItem('homeatlas.staledays', el.value); } catch (x) { /* gilt dann nur bis zum Neuladen */ } $('#stalebox').innerHTML = staleHtml(); bindStale(); };
+}
 function renderFinds() {
   const pend = S.discoveries.filter(d => d.state === 'pending'), ign = S.discoveries.filter(d => d.state === 'ignored');
   const card = d => {
@@ -1226,10 +1289,12 @@ function renderFinds() {
   main.innerHTML = `<div class="page"><div class="bar"><h2>Funde</h2>${pend.length ? `<button class="btn pri" data-act="approve" data-id="all">Alle ${pend.length} übernehmen</button>` : ''}` +
     `<span class="muted">Geräte aus dem Scan, die noch nicht dokumentiert sind</span></div>` +
     `<div class="bar">${searchBox('findq', findQ, 'Suchen: IP, Name, MAC, Hersteller, Port …')}</div><div id="findbody">${body()}</div>` +
+    `<div id="stalebox">${staleHtml()}</div>` +
     `<h3 class="faint" style="margin-top:26px">Scan-Verlauf</h3><div class="tscroll"><table class="t"><tr><th>Netz</th><th>Start</th><th>Dauer</th><th>Hosts</th><th>Neu</th><th>Status</th></tr>` +
     S.scans.map(s => `<tr><td class="mono">${esc(s.network)}</td><td>vor ${ago(s.started)}</td><td>${s.finished ? Math.round(s.finished - s.started) + ' s' : '…'}</td>` +
       `<td>${s.hosts}</td><td>${s.new}</td><td>${esc(s.status)}${s.log ? ' · ' + esc(s.log) : ''}</td></tr>`).join('') + '</table></div></div>';
   $('#findq').addEventListener('input', e => { findQ = e.target.value; $('#findbody').innerHTML = body(); });
+  bindStale();
 }
 
 // ------------------------------------------------------------ Überwachung
@@ -1256,7 +1321,7 @@ function monBody() {
   const f = c => match(monQ, c.device, c.name, c.target, c.port, KINDS_CHECK[c.kind], MON.areas[c.area], c.status === 'down' ? 'ausgefallen problem' : '');
   let h = `<div class="mbanner ${down.length ? 'bad' : 'ok'}"><span class="dot ${down.length ? 'offline' : 'online'}"></span><b>${down.length ? `${down.length} ${down.length === 1 ? 'Problem' : 'Probleme'}` : 'Alles in Ordnung'}</b>` +
     `<span class="muted">${on.length - down.length - never.length - wait.length} von ${on.length} Checks in Ordnung${wait.length ? ` · ${wait.length} noch ohne Ergebnis` : ''}${all.length - on.length ? ` · ${all.length - on.length} pausiert` : ''}` +
-    ` · Benachrichtigung ${MON.notify ? 'aktiv' : 'aus'}</span></div>` +
+    ` · ${MON.notify ? `${MON.notify} ${MON.notify === 1 ? 'Benachrichtigungsziel' : 'Benachrichtigungsziele'}` : 'keine Benachrichtigung'}</span></div>` +
     (never.length ? `<div class="hint" style="margin:8px 0 0;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span><b>${never.length} ${never.length === 1 ? 'Check war' : 'Checks waren'} noch nie erreichbar.</b> Das ist meist ein falsches Ziel oder ein Dienst, den es dort nicht gibt – kein Ausfall, deshalb auch keine Meldung.</span>` +
       `<button class="btn sm" data-act="delNever">Diese ${never.length} entfernen</button></div>` : '');
   if (down.filter(f).length) h += `<h3 class="faint">Was ist los</h3><div class="box mprob">` + down.filter(f).sort((a, b) => (a.since || 0) - (b.since || 0)).map(c =>
@@ -1386,6 +1451,44 @@ function loadBackups() {
       : '<span class="muted">Noch keine Sicherung vorhanden.</span>';
   }).catch(e => { const box = $('#backups'); if (box) box.textContent = e.message; });
 }
+let NOTI = null;
+const NEV = {both: 'Ausfall und Wiederkehr', down: 'nur Ausfälle', up: 'nur Wiederkehr'};
+function loadNotifiers() {
+  api('GET', '/api/notifiers').then(r => {
+    NOTI = r; const box = $('#notifiers'); if (!box) return;
+    box.className = '';
+    box.innerHTML = r.notifiers.length ? r.notifiers.map(n => {
+      const scope = (n.areas.length ? n.areas.map(a => AREA_LABEL[a] || a).join(', ') : 'alle Bereiche') + ' · ' + NEV[n.events || 'both'];
+      const quiet = n.quiet_from && n.quiet_to ? `Ruhe ${esc(n.quiet_from)}–${esc(n.quiet_to)}${n.quiet_areas.length ? ' für ' + n.quiet_areas.map(a => AREA_LABEL[a] || a).join(', ') : ''}${n.quiet ? ' · gerade Ruhezeit' : ''}${n.held ? ` · ${n.held} zurückgehalten` : ''}` : '';
+      return `<div class="rowl"><span class="dot ${!n.enabled ? 'unknown' : (n.last_status || '').startsWith('Fehler') ? 'offline' : n.last_status ? 'online' : 'unknown'}"></span>` +
+        `<div style="flex:1;min-width:0"><b>${esc(n.name)}</b> <span class="muted">${esc(r.kinds[n.kind].label)}${n.enabled ? '' : ' · aus'}</span>` +
+        `<div class="muted" style="font-size:12px">${esc(scope)}${quiet ? ' · ' + quiet : ''}</div>` +
+        ((n.last_status || '').startsWith('Fehler') ? `<div style="font-size:12px;color:var(--bad)">${esc(n.last_status)}</div>` : '') + '</div>' +
+        `<button class="btn sm" data-act="notiTest" data-id="${n.id}">Test</button><button class="btn sm" data-act="notiEdit" data-id="${n.id}">Bearbeiten</button></div>`;
+    }).join('') : '<span class="muted">Noch kein Ziel. Ohne Ziel zeigt die Überwachung Ausfälle nur hier an.</span>';
+    $('#nadd').innerHTML = Object.entries(r.kinds).map(([k, v]) => `<button class="btn sm" data-act="notiNew" data-kind="${k}">+ ${esc(v.label)}</button>`).join('');
+  }).catch(e => { const box = $('#notifiers'); if (box) box.textContent = e.message; });
+}
+function notiForm(n) {
+  const k = NOTI.kinds[n.kind], isNew = !n.id;
+  const areaOpts = Object.entries(AREA_LABEL).map(([a, l]) => [a, l]);
+  const cf = k.fields.map(([key, label, def, kind]) => Array.isArray(kind) ? ['cfg_' + key, label, 'select', kind] : ['cfg_' + key, label, kind === 'password' ? 'password' : 'text', def || '']);
+  const val = {name: n.name || k.label, enabled: n.enabled ?? 1, events: n.events || 'both', areas: n.areas || [], quiet_from: n.quiet_from || '', quiet_to: n.quiet_to || '',
+    quiet_areas: n.quiet_areas || [], digest: n.digest ?? 1};
+  for (const [key, , def] of k.fields) val['cfg_' + key] = (n.config || {})[key] ?? (isNew ? def || '' : '');
+  openForm(isNew ? 'Neues Ziel: ' + esc(k.label) : esc(n.name), [
+    ['name', 'Name'], ...cf,
+    ['areas', 'Bereiche (keiner gewählt = alle)', 'multi', areaOpts], ['events', 'Melden', 'select', Object.entries(NEV)],
+    [['quiet_from', 'Ruhezeit von', 'time'], ['quiet_to', 'bis', 'time']],
+    ['quiet_areas', 'Ruhezeit gilt für (keiner gewählt = alle Bereiche)', 'multi', areaOpts],
+    ['digest', 'Meldungen aus der Ruhezeit danach gesammelt schicken', 'check'], ['enabled', 'Aktiv', 'check'],
+  ], val, async data => {
+    const body = {kind: n.kind, config: {}};
+    for (const [key, v] of Object.entries(data)) if (key.startsWith('cfg_')) body.config[key.slice(4)] = v; else body[key] = v;
+    if (isNew) await api('POST', '/api/notifiers', body); else await api('PUT', '/api/notifiers/' + n.id, body);
+    renderSystem();
+  }, isNew ? '' : `<button class="btn bad" type="button" data-act="notiDel" data-id="${n.id}">Löschen</button>`);
+}
 function renderSystem() {
   const s = S.settings, admin = S.role === 'admin';
   const vals = f => { const d = {}; for (const el of f.elements) if (el.name) d[el.name] = el.value; return d; };
@@ -1409,8 +1512,11 @@ function renderSystem() {
     `<label>Titel<input name="title" value="${esc(s.title)}"></label><div class="two"><label>Scan-Intervall (Minuten)<input name="scan_interval_min" type="number" min="5" value="${esc(s.scan_interval_min)}"></label>` +
     `<label>Sync-Intervall der Anbindungen (Minuten)<input name="sync_interval_min" type="number" min="1" value="${esc(s.sync_interval_min)}"></label></div>` +
     `<label>SNMP-Community für den Scan<input name="snmp_community" value="${esc(s.snmp_community)}"></label>` +
-    `<label>Benachrichtigung bei Ausfall: ntfy-Adresse oder Webhook (leer = aus)<input name="notify_url" value="${esc(s.notify_url || '')}" placeholder="https://ntfy.sh/mein-thema" autocomplete="off"></label>` +
-    `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button><button class="btn" type="button" data-act="testNotify">Testmeldung senden</button></div></form></div>` +
+    `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button></div></form></div>` +
+    `<h3 class="faint" style="margin-top:24px">Benachrichtigungen</h3><div class="box"><div id="notifiers" class="muted">lädt …</div>` +
+    `<div class="acts" id="nadd" style="margin:10px 0 0"></div>` +
+    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Je Ziel lässt sich festlegen, aus welchen Bereichen es Meldungen bekommt und wann Ruhe ist. ` +
+    `Meldungen aus der Ruhezeit kommen danach gesammelt, oder gar nicht.</p></div>` +
     `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><div class="acts" style="margin:0"><a class="btn" href="/api/export" download>Export (JSON)</a>` +
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
     `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten, vorher legt HomeAtlas automatisch eine Sicherung an.</p></div>`;
@@ -1436,7 +1542,7 @@ function renderSystem() {
   });
   $('#setf').addEventListener('submit', e => { e.preventDefault(); run(() => api('POST', '/api/settings/save', vals(e.target)), 'Gespeichert'); });
   $('#bkf').addEventListener('submit', e => { e.preventDefault(); run(() => api('POST', '/api/settings/save', vals(e.target)), 'Gespeichert'); });
-  loadBackups();
+  loadBackups(); loadNotifiers();
   api('GET', '/api/auth/users').then(r => {
     const box = $('#users'); if (!box) return;
     box.className = '';
@@ -1625,6 +1731,33 @@ const ACT = {
     openForm(`Auf „${esc(sh.name)}“ stellen`, [['dev', 'Gerät', 'select', free.map(x => [x.id, x.name])]], {}, data => api('PUT', '/api/devices/' + data.dev, {meta: {shelf: sh.id}}), '', true);
   },
   shelfRemove: d => run(() => api('PUT', '/api/devices/' + d.id, {meta: {shelf: null}})),
+  ppPort: d => {
+    const p = dev(+d.id), k = +d.port, pm = {...ppMap(p)}, e = pm[k] || {};
+    const sws = [['', '– keiner –'], ...S.devices.filter(x => ['switch', 'router', 'firewall'].includes(x.type)).map(x => [x.id, x.name])];
+    openForm(`${esc(p.name)} · Port ${k}`, [['label', 'Beschriftung (z. B. Dose Büro 2)'], ['dev', 'Endgerät hinter der Dose', 'select', devOpts()],
+      [['sw', 'Gepatcht auf Switch', 'select', sws], ['sw_port', 'Switch-Port', 'text', 'z. B. 5']], ['note', 'Notiz']],
+      {label: e.label || '', dev: e.dev || '', sw: e.sw || '', sw_port: e.sw_port || '', note: e.note || ''}, async data => {
+        const v = {label: (data.label || '').trim(), dev: data.dev ? +data.dev : null, sw: data.sw ? +data.sw : null, sw_port: (data.sw_port || '').trim(), note: (data.note || '').trim()};
+        if (ppUsed(v)) pm[k] = Object.fromEntries(Object.entries(v).filter(([, x]) => x)); else delete pm[k];
+        await ppSave(p, pm); sel = p.id;
+      }, ppUsed(e) ? `<button class="btn" type="button" data-act="ppClear" data-id="${p.id}" data-port="${k}">Port leeren</button>` : '', true);
+  },
+  ppClear: d => { const p = dev(+d.id), pm = {...ppMap(p)}; delete pm[+d.port]; sel = p.id; run(() => ppSave(p, pm), 'Port geleert').then(() => showDevice(p.id)); },
+  ppBulk: d => {
+    const p = dev(+d.id), pm = ppMap(p), n = ppN(p);
+    const text = Array.from({length: n}, (_, i) => i + 1).map(k => `${k}: ${(pm[k] || {}).label || ''}`).join('\n');
+    openForm(`${esc(p.name)} · Beschriftungen`, [['list', 'Eine Zeile je Port: „Nummer: Beschriftung“. Leere Beschriftung entfernt nur die Beschriftung.', 'area']], {list: text}, async data => {
+      const next = {...pm};
+      for (const line of (data.list || '').split('\n')) {
+        const m = line.match(/^\s*(\d+)\s*[:.;\t-]?\s*(.*)$/); if (!m) continue;
+        const k = +m[1]; if (k < 1 || k > n) continue;
+        const e = {...(next[k] || {}), label: m[2].trim()}; if (!e.label) delete e.label;
+        if (ppUsed(e)) next[k] = e; else delete next[k];
+      }
+      await ppSave(p, next); sel = p.id;
+    }, '', true);
+    const ta = $('[name=list]', panel); if (ta) ta.rows = Math.min(24, n + 1);
+  },
   ppPorts: d => { const n = prompt('Anzahl der Ports (1–96):', (dev(+d.id).meta || {}).ports_n || 24); if (n) run(() => api('PUT', '/api/devices/' + d.id, {meta: {ports_n: Math.min(96, Math.max(1, +n || 24))}})); },
   newGroup: () => openForm('Neuer Bereich', [['name', 'Name (z. B. Smarthome-Lampen)'], ['note', 'Beschreibung'], ['vlan_id', 'Netzwerk (für die Rahmenfarbe)', 'select', vlanOpts()], ['icon', 'Icon']],
     {icon: 'type-group'}, async data => { if (!data.name) throw new Error('Name fehlt'); sel = (await api('POST', '/api/devices', {...data, type: 'group'})).id; }, '', true),
@@ -1666,7 +1799,11 @@ const ACT = {
       async data => { const areas = Object.keys(data).filter(k => data[k]).map(k => k.slice(2)); const r = await api('POST', '/api/monitor/generate', {areas}); MON = null; setTimeout(() => toast(`${r.created} Checks angelegt – erste Ergebnisse in wenigen Sekunden`), 50); },
       '<p class="muted" style="flex-basis:100%;font-size:12.5px;margin:6px 0 0">Je Gerät mit IP ein Ping, je bekanntem Dienst-Port ein Port-Check, je Weboberfläche ein HTTP-Check. Vorhandene Checks bleiben unverändert; Clients und Rack-Platzhalter werden nie überwacht.</p>');
   },
-  testNotify: async () => { try { await api('POST', '/api/monitor/test-notify'); toast('Testmeldung gesendet'); } catch (e) { toast(e.message, true); } },
+  testNotify: async () => { try { const r = await api('POST', '/api/monitor/test-notify'); toast(`Testmeldung an ${r.sent} ${r.sent === 1 ? 'Ziel' : 'Ziele'} gesendet`); } catch (e) { toast(e.message, true); } },
+  notiNew: d => notiForm({kind: d.kind}),
+  notiEdit: d => notiForm(NOTI.notifiers.find(n => n.id === +d.id)),
+  notiTest: async d => { try { toast('Sende …'); await api('POST', `/api/notifiers/${d.id}/test`); toast('Testmeldung gesendet'); } catch (e) { toast(e.message, true); } loadNotifiers(); },
+  notiDel: async d => { if (!confirm('Dieses Benachrichtigungsziel löschen?')) return; try { await api('DELETE', '/api/notifiers/' + d.id); closePanel(); toast('Gelöscht'); renderSystem(); } catch (e) { toast(e.message, true); } },
   newLink: d => linkForm({a_id: +d.id, speed: '1G', kind: d.kind || 'cable'}),
   editLink: d => showLink(+d.id),
   delLink: d => { closePanel(); run(() => api('DELETE', '/api/links/' + d.id)); },
@@ -1679,6 +1816,16 @@ const ACT = {
   editVlan: d => vlanForm(vlan(+d.id)),
   delVlan: d => { if (confirm('Netzwerk löschen? Die Geräte bleiben erhalten.')) { closePanel(); run(() => api('DELETE', '/api/vlans/' + d.id)); } },
   scan: d => run(() => api('POST', `/api/vlans/${d.id}/scan`), 'Scan gestartet – Ergebnisse erscheinen unter „Funde“'),
+  staleDo: d => {
+    const {open, finds} = staleList(), op = d.op;
+    const ids = op === 'discard' ? finds.map(f => f.id) : d.id === 'all' ? open.map(x => x.id) : [+d.id];
+    if (op === 'delete') {
+      const n = ids.length, kids = S.devices.filter(x => ids.includes(x.parent_id)).length;
+      if (!confirm(n === 1 ? `„${dev(ids[0]).name}“ löschen?${kids ? ` Die ${kids} Geräte darunter werden mitgelöscht.` : ''}` :
+        `${n} Geräte löschen?${kids ? ` Dazu ${kids} Geräte, die darunter hängen.` : ''} Eine Sicherung gibt es unter System.`)) return;
+    }
+    run(() => api('POST', '/api/stale/cleanup', {[op]: ids}), {delete: ids.length === 1 ? 'Gelöscht' : `${ids.length} Geräte gelöscht`, keep: 'Wird behalten', unkeep: 'Wird wieder geprüft', discard: 'Alte Funde verworfen'}[op]);
+  },
   approve: d => run(() => api('POST', `/api/discoveries/${d.id}/approve`), 'Übernommen'),
   ignore: d => run(() => api('POST', `/api/discoveries/${d.id}/ignore`)),
   restore: d => run(() => api('POST', `/api/discoveries/${d.id}/restore`)),

@@ -22,7 +22,7 @@ MIN_LEN = 10
 PUBLIC = {"/healthz", "/login", "/api/auth/status", "/api/auth/login", "/api/auth/setup"}
 ROLES = ("read", "write", "admin")
 SELF_SERVICE = {"/api/auth/logout", "/api/auth/password"}          # darf jedes Konto
-ADMIN_ONLY = ("/api/auth/users", "/api/export", "/api/restore", "/api/settings/save", "/api/backups")
+ADMIN_ONLY = ("/api/auth/users", "/api/export", "/api/restore", "/api/settings/save", "/api/backups", "/api/notifiers")
 _fails = {}          # ip -> [anzahl, gesperrt_bis]
 router = APIRouter(prefix="/api/auth")
 

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import Response
 
-from . import db, types
+from . import db, notify, types
 
 router = APIRouter(prefix="/api/monitor")
 THRESHOLD = 2            # Fehlschläge in Folge, ab denen ein Check als Problem gilt
@@ -148,33 +148,19 @@ def label(c):
 _outbox, _outbox_lock = [], threading.Lock()
 
 
-def queue(text):
+def queue(text, area="other", event="down"):
     """Meldungen sammeln: fällt ein Switch aus, kommt eine Nachricht statt dreißig."""
     with _outbox_lock:
-        _outbox.append((time.time(), text))
+        _outbox.append((time.time(), {"text": text, "area": area, "event": event}))
 
 
 def flush(force=False):
     with _outbox_lock:
         if not _outbox or (not force and time.time() - _outbox[0][0] < 12):
             return
-        lines = [t for _, t in _outbox]
+        events = [e for _, e in _outbox]
         _outbox.clear()
-    notify(lines[0] if len(lines) == 1 else f"HomeAtlas: {len(lines)} Meldungen\n" + "\n".join(lines[:15]) +
-           (f"\n… und {len(lines) - 15} weitere" if len(lines) > 15 else ""))
-
-
-def notify(text):
-    """Schickt die Meldung an die hinterlegte Adresse (ntfy-Thema oder beliebiger Webhook, der Text per POST annimmt)."""
-    url = (db.setting("notify_url") or "").strip()
-    if not url:
-        return
-    try:
-        req = urllib.request.Request(url, data=text.encode(), method="POST",
-                                     headers={"Content-Type": "text/plain; charset=utf-8", "Title": "HomeAtlas"})
-        urllib.request.urlopen(req, timeout=8).close()
-    except Exception as e:  # noqa: BLE001
-        print("notify:", e, flush=True)
+    notify.dispatch(events)
 
 
 def record(c, ok, ms, err):
@@ -204,7 +190,8 @@ def record(c, ok, ms, err):
         text = f"{label(c)} – {'wieder erreichbar' if event == 'up' else 'ausgefallen' + (': ' + err if err else '')}"
         db.x("INSERT INTO check_events(ts,check_id,device_id,kind,text) VALUES(?,?,?,?,?)",
              (now, c["id"], c.get("device_id"), event, text))
-        queue(("✅ " if event == "up" else "🔴 ") + text)
+        dev = db.one("SELECT type FROM devices WHERE id=?", (c.get("device_id") or 0,))
+        queue(("✅ " if event == "up" else "🔴 ") + text, area_of(dev, c["kind"]), event)
 
 
 def execute(check_id):
@@ -214,7 +201,7 @@ def execute(check_id):
 
 
 def _loop():
-    pool, last_prune = ThreadPoolExecutor(max_workers=16), 0
+    pool, last_prune, last_tick = ThreadPoolExecutor(max_workers=16), 0, 0
     running = set()
 
     def job(cid):
@@ -232,6 +219,9 @@ def _loop():
                     running.add(c["id"])
                     pool.submit(job, c["id"])
             flush()
+            if now - last_tick >= 60:
+                last_tick = now
+                notify.tick()
             if now - last_prune > 600:
                 last_prune = now
                 db.x("DELETE FROM check_results WHERE ts<?", (now - 12 * 3600,))
@@ -319,7 +309,7 @@ def overview():
                        "last30": recent.get(c["id"], [])[-30:], "up24": pct(up24), "up7": pct(up7)})
     return {"checks": checks, "areas": AREAS, "threshold": THRESHOLD,
             "events": db.q("SELECT * FROM check_events WHERE ts>? ORDER BY ts DESC LIMIT 200", (now - 7 * 86400,)),
-            "notify": bool((db.setting("notify_url") or "").strip()), "now": now}
+            "notify": db.one("SELECT count(*) n FROM notifiers WHERE enabled=1")["n"], "now": now}
 
 
 @router.get("/plan")
@@ -419,10 +409,14 @@ def remove_never():
 
 @router.post("/test-notify")
 def test_notify():
-    if not (db.setting("notify_url") or "").strip():
-        raise HTTPException(400, "Keine Adresse für Benachrichtigungen hinterlegt")
-    notify("🔔 HomeAtlas: Testmeldung – Benachrichtigungen funktionieren")
-    return {"ok": True}
+    """An alle aktiven Ziele eine Testmeldung."""
+    ns = notify.all_notifiers(enabled_only=True)
+    if not ns:
+        raise HTTPException(400, "Kein Benachrichtigungsziel angelegt")
+    errs = [f"{n['name']}: {e}" for n in ns if (e := notify._deliver(n, "HomeAtlas", "🔔 Testmeldung – Benachrichtigungen funktionieren", False))]
+    if errs:
+        raise HTTPException(502, "; ".join(errs))
+    return {"ok": True, "sent": len(ns)}
 
 
 @router.get("/gatus.yaml")
