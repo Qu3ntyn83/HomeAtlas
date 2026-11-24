@@ -59,16 +59,18 @@ KINDS = {
                 "„ReadOnly“ an. Bei „Gehört zu Gerät“ den Server wählen, zu dem der BMC gehört – die IPMI-Adresse wird dann dessen "
                 "zusätzliche Adresse. Ältere Boards (z. B. Supermicro X10) brauchen dafür eine aktuelle BMC-Firmware."},
     "unifi": {"label": "UniFi Network", "fields": [
-        ["host", "Adresse der Konsole/des Controllers (https://192.168.1.1)"], ["port", "Port (leer = automatisch: 443, dann 8443)"],
-        ["site", "Standort-ID", "default"], ["api_key", "API-Key (UniFi OS, empfohlen)", "", "password"],
+        ["host", "Adresse der Konsole/des Controllers (https://192.168.1.1)"], ["port", "Port (leer = automatisch: 443, 8443, 11443)"],
+        ["site", "Standort-ID", "default"], ["api_key", "API-Key (nur UniFi OS: Konsole oder UniFi OS Server)", "", "password"],
         ["user", "oder: lokaler Benutzer"], ["password", "Passwort", "", "password"],
         ["clients", "Unbekannte Clients als Geräte anlegen (Bereich „UniFi-Clients“)", "", "check"]],
-        "help": "UniFi OS (UDM, UCG, Cloud Key): Port 443. Selbst betriebene Network Application (z. B. im Docker): Port 8443 – "
-                "nicht 8080, das ist nur der Inform-Port der Geräte. Leer lassen probiert beides. "
+        "help": "UniFi-Konsole (UDM, UCG, Cloud Key): Port 443. UniFi OS Server: 11443. Selbst betriebene Network Application "
+                "(z. B. im Docker): Port 8443 – nicht 8080, das ist nur der Inform-Port der Geräte. Leer lassen probiert alle drei. "
+                "Die selbst betriebene Network Application kennt keine API-Keys: dort einen lokalen Benutzer nehmen. "
                 "Liest Access Points, Switches und Gateway mit ihren Uplinks sowie die verbundenen Clients. Clients werden vorhandenen "
                 "Geräten über MAC oder IP zugeordnet und bekommen ihre Verbindung: per Kabel mit Switch-Port, per WLAN mit SSID zum "
-                "Access Point. Am besten einen API-Key nehmen (UniFi OS: Network → Einstellungen → Control Plane → Integrationen). "
-                "Ohne API-Key einen lokalen Benutzer mit der Rolle „Nur ansehen“ anlegen; Ubiquiti-Konten mit Zwei-Faktor gehen nicht. "
+                "Access Point. Unter UniFi OS am besten einen API-Key nehmen (Network → Einstellungen → Control Plane → Integrationen). "
+                "Sonst einen lokalen Benutzer anlegen (Einstellungen → Admins & Benutzer, „Nur lokaler Zugriff“, Rolle „Nur ansehen“); "
+                "Ubiquiti-Konten mit Zwei-Faktor gehen nicht. "
                 "Von Hand dokumentierte Verbindungen haben Vorrang."},
     "homeassistant": {"label": "Home Assistant", "fields": [
         ["host", "URL (http://homeassistant:8123)"], ["token", "Langlebiges Zugriffstoken", "", "password"]]},
@@ -1198,8 +1200,8 @@ UNIFI_TYPES = {"uap": "ap", "usw": "switch", "ugw": "router", "uxg": "router", "
 
 class UniFiClient:
     """UniFi Network: UniFi OS (UDM, UCG, Cloud Key Gen2+) mit API-Key oder Benutzer, selbst betriebene
-    Network Application (Docker, Port 8443) mit Benutzer oder API-Key. Gelesen wird über die /stat-Schnittstellen.
-    Port leer = automatisch: 443, dann 8443. Port 8080 ist nur der Inform-Port der Geräte – dann wird 8443 versucht."""
+    Network Application (Docker, Port 8443) nur mit Benutzer – sie kennt keine API-Keys. Gelesen wird über die /stat-Schnittstellen.
+    Port leer = automatisch: 443, 8443, 11443 (UniFi OS Server). Port 8080 ist nur der Inform-Port der Geräte – dann wird 8443 versucht."""
 
     def __init__(self, c):
         raw = (c.get("host") or "").strip()
@@ -1249,7 +1251,7 @@ class UniFiClient:
             if self.scheme == "https" and not self.raw_http:
                 out.append(("http", self.port))       # z. B. hinter einem Proxy ohne TLS
         else:
-            out += [("https", 443), ("https", 8443)]
+            out += [("https", 443), ("https", 8443), ("https", 11443)]
         return list(dict.fromkeys(out))
 
     def _try_login(self):
