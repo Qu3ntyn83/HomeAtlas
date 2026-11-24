@@ -1269,22 +1269,27 @@ class UniFiClient:
                         raise RuntimeError(explain(e, "UniFi")) from None
             raise RuntimeError(f"UniFi: Standort „{self.site}“ nicht gefunden – die Standort-ID steht in der Adresszeile "
                                "der Weboberfläche (…/manage/<ID>/…), meist „default“") from None
+        # Erst UniFi OS (/api/auth/login), dann die selbst betriebene Network Application (/api/login). Letztere antwortet
+        # auf /api/auth/login mit 401 „LoginRequired“ – das ist kein falsches Passwort, sondern der falsche Weg.
+        rejected = False
         try:
             self._req("POST", "/api/auth/login", {"username": self.user, "password": self.pw, "rememberMe": False})
             self.prefix, self.os = "/proxy/network", True
             return
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen. Es muss ein lokales Konto sein, "
-                                   "Ubiquiti-Konten mit Zwei-Faktor gehen nicht") from None
-            if e.code not in (404, 405):
+                body = e.read().decode(errors="ignore") if hasattr(e, "read") else ""
+                rejected = "LoginRequired" not in body
+            elif e.code not in (404, 405):
                 raise RuntimeError(explain(e, "UniFi")) from None
-        try:                                          # selbst betriebene Network Application / klassischer Controller
+        try:
             self._req("POST", "/api/login", {"username": self.user, "password": self.pw})
             self.prefix, self.os = "", False
+            return
         except urllib.error.HTTPError as e2:
-            if e2.code in (400, 401, 403):
-                raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen (lokales Konto, ohne Zwei-Faktor)") from None
+            if e2.code in (400, 401, 403) or rejected:
+                raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen. Es muss ein lokales Konto sein, "
+                                   "Ubiquiti-Konten mit Zwei-Faktor gehen nicht") from None
             raise RuntimeError(explain(e2, "UniFi")) from None
 
     def login(self):
