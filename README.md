@@ -165,6 +165,19 @@ wählen: die BMC-Adresse wird dann dessen zusätzliche Adresse „IPMI“, die K
 
 ## Datensicherung
 
+HomeAtlas sichert sich selbst: täglich um 3 Uhr, vor jedem `./update.sh` und vor jedem Wiederherstellen. Die Sicherungen
+(Datenbank und eigene Icons als `.tar.gz`) liegen in `data/backups`, die letzten 14 bleiben. Uhrzeit, Anzahl und „Jetzt sichern“
+stehen unter *System → Sicherungen* (Admin). Wer `./data` zusätzlich woanders hin sichert, hat sie dort gleich mit.
+
+Zurückspielen:
+
+```sh
+docker compose stop
+rm -f data/homeatlas.db-wal data/homeatlas.db-shm
+tar -xzf data/backups/homeatlas-JJJJMMTT-HHMMSS-auto.tar.gz -C data
+docker compose start
+```
+
 *System → Export (JSON)* (Admin) speichert alles: Geräte, Kabel, Racks, Netzwerke, WLANs, Anbindungen samt Zugangsdaten, Checks,
 Menü-Links, Gerätetypen, eigene Icons und Einstellungen. *Export wiederherstellen* spielt ihn wieder ein und ersetzt dabei alle Daten; ältere Exporte bleiben lesbar.
 Für eine vollständige Sicherung genügt auch eine Kopie von `./data` bei gestopptem Container.

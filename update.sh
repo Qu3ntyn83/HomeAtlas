@@ -9,6 +9,11 @@ if [ "$1" != "--nach-pull" ]; then
   exec sh "$(basename "$0")" --nach-pull
 fi
 git log -1 --format='Stand: %h %s (%cd)' --date=short
+# Sicherung mit der noch laufenden Version (ab 0.27; ältere kennen das Modul nicht)
+if docker ps --format '{{.Names}}' | grep -qx homeatlas; then
+  if out=$(docker exec homeatlas python -m app.backup update 2>/dev/null); then echo "Sicherung vor dem Update: $out"
+  else echo "Sicherung vor dem Update übersprungen (ältere Version ohne Sicherungen)"; fi
+fi
 echo "== Container neu bauen und starten =="
 # Umbenennung LabVis → HomeAtlas: der alte Container „labvis“ würde sonst den Port belegen
 if docker ps -a --format '{{.Names}}' | grep -qx labvis; then docker rm -f labvis >/dev/null && echo "alter Container labvis entfernt"; fi

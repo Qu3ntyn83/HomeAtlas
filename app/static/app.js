@@ -161,7 +161,14 @@ const int2ip = n => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(
 // ------------------------------------------------------------ Laden / Ansichten
 async function load(silent) {
   try {
-    S = await api('GET', '/api/state');
+    // Hintergrund-Abfrage mit Fingerabdruck: hat sich nichts geändert, wird nicht neu gezeichnet (schont Akku und Hover-Zustand)
+    const r = await api('GET', '/api/state' + (silent && S && S.hash ? '?since=' + S.hash : ''));
+    if (r.unchanged) {
+      S.now = r.now;
+      if (!busy && sel && panelMode === 'device' && dev(sel)) showDevice(sel, true);   // „vor x min“ aktuell halten
+      return;
+    }
+    S = r;
   } catch (e) { if (!silent) toast(e.message, true); return; }
   if (S.types) { TYPEDEF = Object.fromEntries(S.types.map(t => [t.key, t])); TYPES = Object.fromEntries(S.types.map(t => [t.key, t.label])); }
   if (load.build && S.build !== load.build && panelMode !== 'form') { location.reload(); return; }
@@ -1365,6 +1372,20 @@ function integForm(i) {
 // ------------------------------------------------------------ System
 const ROLE = {read: 'Lesen', write: 'Ändern', admin: 'Admin'};
 const roleOpts = cur => Object.entries(ROLE).map(([k, v]) => `<option value="${k}"${k === cur ? ' selected' : ''}>${v}</option>`).join('');
+const fsize = b => b < 1024 ? b + ' B' : b < 1048576 ? (b / 1024).toFixed(0) + ' KB' : (b / 1048576).toFixed(1) + ' MB';
+const BKR = {auto: 'täglich', manuell: 'von Hand', update: 'vor Update', restore: 'vor Wiederherstellen'};
+function loadBackups() {
+  api('GET', '/api/backups').then(r => {
+    const box = $('#backups'); if (!box) return;
+    box.className = '';
+    box.innerHTML = r.backups.length ? `<div class="muted" style="font-size:12.5px;margin-bottom:4px">${r.backups.length} von höchstens ${r.keep} · zusammen ${fsize(r.total)}</div>` +
+      r.backups.map(b => `<div class="rowl"><span class="mono" style="font-size:12.5px">${new Date(b.time * 1000).toLocaleString('de-DE', {dateStyle: 'short', timeStyle: 'short'})}</span>` +
+        `<span class="pill">${esc(BKR[b.reason] || b.reason)}</span><span class="muted" style="font-size:12px">${fsize(b.size)}</span>` +
+        `<span style="margin-left:auto;display:flex;gap:6px"><a class="btn sm" href="/api/backups/${encodeURIComponent(b.name)}" download>Herunterladen</a>` +
+        `<button class="btn sm bad" data-act="backupDel" data-name="${esc(b.name)}">Löschen</button></span></div>`).join('')
+      : '<span class="muted">Noch keine Sicherung vorhanden.</span>';
+  }).catch(e => { const box = $('#backups'); if (box) box.textContent = e.message; });
+}
 function renderSystem() {
   const s = S.settings, admin = S.role === 'admin';
   const vals = f => { const d = {}; for (const el of f.elements) if (el.name) d[el.name] = el.value; return d; };
@@ -1392,7 +1413,15 @@ function renderSystem() {
     `<div class="acts" style="margin:0"><button class="btn pri">Speichern</button><button class="btn" type="button" data-act="testNotify">Testmeldung senden</button></div></form></div>` +
     `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><div class="acts" style="margin:0"><a class="btn" href="/api/export" download>Export (JSON)</a>` +
     `<button class="btn" data-act="pick" data-kind="restore">Export wiederherstellen</button><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>` +
-    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten.</p></div>`;
+    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Der Export enthält die Zugangsdaten der Anbindungen. Der YAML-Import liest das Format von Goblinmine/homelab-diagram und legt die Einträge zusätzlich an. Wiederherstellen ersetzt alle Daten, vorher legt HomeAtlas automatisch eine Sicherung an.</p></div>`;
+  if (admin) h += `<h3 class="faint" style="margin-top:24px">Sicherungen</h3><div class="box"><form class="f" id="bkf"><div class="two">` +
+    `<label>Tägliche Sicherung<select name="backup_enabled"><option value="1"${s.backup_enabled !== '0' ? ' selected' : ''}>an</option><option value="0"${s.backup_enabled === '0' ? ' selected' : ''}>aus</option></select></label>` +
+    `<label>Uhrzeit (Stunde)<input name="backup_hour" type="number" min="0" max="23" value="${esc(s.backup_hour || '3')}"></label></div>` +
+    `<label>Aufheben (Anzahl Sicherungen)<input name="backup_keep" type="number" min="1" max="365" value="${esc(s.backup_keep || '14')}"></label>` +
+    `<div class="acts" style="margin:0"><button class="btn">Speichern</button><button class="btn pri" type="button" data-act="backupNow">Jetzt sichern</button></div></form>` +
+    `<div id="backups" class="muted" style="margin-top:12px">lädt …</div>` +
+    `<p class="muted" style="margin:10px 0 0;font-size:12.5px">Sicherungen enthalten Datenbank und eigene Icons, also auch die Zugangsdaten der Anbindungen. Sie liegen in <code>data/backups</code>; dazu kommt je eine vor jedem Update und vor jedem Wiederherstellen. ` +
+    `Zurückspielen: Container stoppen, <code>rm -f data/homeatlas.db-wal data/homeatlas.db-shm</code>, <code>tar -xzf data/backups/&lt;Datei&gt; -C data</code>, Container starten.</p></div>`;
   else if (S.role === 'write') h += `<h3 class="faint" style="margin-top:24px">Daten</h3><div class="box"><button class="btn" data-act="pick" data-kind="inventory">inventory.yaml importieren</button></div>`;
   main.innerHTML = h + `<p class="faint" style="font-size:12px;margin-top:18px">${S.devices.length} Geräte · ${S.links.length} Verbindungen · ${S.vlans.length} Netzwerke · ${S.racks.length} Racks<br><span class="mono">HomeAtlas ${esc(S.version)} · Build ${esc(S.build)}</span></p></div>`;
   $('#pwf').addEventListener('submit', async e => {
@@ -1406,6 +1435,8 @@ function renderSystem() {
     try { await api('POST', '/api/auth/users', vals(e.target)); toast('Benutzer angelegt'); renderSystem(); } catch (x) { toast(x.message, true); }
   });
   $('#setf').addEventListener('submit', e => { e.preventDefault(); run(() => api('POST', '/api/settings/save', vals(e.target)), 'Gespeichert'); });
+  $('#bkf').addEventListener('submit', e => { e.preventDefault(); run(() => api('POST', '/api/settings/save', vals(e.target)), 'Gespeichert'); });
+  loadBackups();
   api('GET', '/api/auth/users').then(r => {
     const box = $('#users'); if (!box) return;
     box.className = '';
@@ -1494,6 +1525,8 @@ const ACT = {
   viewMode: d => { viewMode = d.m; closePanel(); renderTopo(); fitView(); },
   floorFilter: d => { floorFilter = d.id === '' ? null : +d.id; closePanel(); renderTopo(); fitView(); },
   floors: () => showFloors(),
+  backupNow: async () => { try { toast('Sichere …'); const r = await api('POST', '/api/backups'); toast('Gesichert: ' + r.name); loadBackups(); } catch (e) { toast(e.message, true); } },
+  backupDel: async d => { if (!confirm('Diese Sicherung löschen?')) return; try { await api('DELETE', '/api/backups/' + encodeURIComponent(d.name)); toast('Gelöscht'); loadBackups(); } catch (e) { toast(e.message, true); } },
   showRoom: d => showRoom(d.name),
   floorAdd: () => { const i = $('#floornew'); const name = i && i.value.trim(); if (!name) return toast('Name der Etage fehlt', true);
     run(async () => { await api('POST', '/api/floors', {name, sort: Math.max(0, ...(S.floors || []).map(f => f.sort || 0)) + 1}); await load(); showFloors(); }, 'Etage angelegt'); },

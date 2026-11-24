@@ -1,6 +1,7 @@
 """HomeAtlas – interaktive Homelab-Dokumentation: Topologie, Racks, Netzwerke, Scanner, Anbindungen."""
 import base64
 import hashlib
+import json
 import os
 import re
 import threading
@@ -12,14 +13,14 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, connectors, db, importer, ipam, monitor, scanner, types
+from . import auth, backup, connectors, db, importer, ipam, monitor, scanner, types
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.26.1"
+VERSION = "0.27.0"
 
 
 def _build_id():
@@ -62,6 +63,7 @@ app.include_router(auth.router)
 app.include_router(monitor.router)
 app.include_router(ipam.router)
 app.include_router(types.router)
+app.include_router(backup.router)
 
 
 def _scheduler():
@@ -82,6 +84,7 @@ def startup():
     ICON_CACHE.mkdir(parents=True, exist_ok=True)
     if not db.env("NO_SCHEDULER"):
         threading.Thread(target=_scheduler, daemon=True).start()
+        threading.Thread(target=backup.loop, daemon=True).start()
         monitor.start()
 
 
@@ -92,7 +95,18 @@ def _mask(i):
 
 
 @app.get("/api/state")
-def state(request: Request):
+def state(request: Request, since: str = ""):
+    d = _state(request)
+    # Fingerabdruck ohne Uhrzeit und Antwortzeiten der Checks: ändert sich nur, wenn es etwas Neues zu zeichnen gibt.
+    # Die Oberfläche fragt alle 15 s mit ?since=<hash> und zeichnet bei „unverändert“ nicht neu.
+    stable = {**d, "now": None, "checks": [{k: v for k, v in c.items() if k != "last_ms"} for c in d["checks"]]}
+    h = hashlib.sha256(json.dumps(stable, sort_keys=True, default=str).encode()).hexdigest()[:20]
+    if since and since == h:
+        return JSONResponse({"unchanged": True, "hash": h, "now": d["now"]}, headers={"Cache-Control": "no-store"})
+    return JSONResponse({**d, "hash": h}, headers={"Cache-Control": "no-store"})
+
+
+def _state(request):
     return {
         "version": VERSION,
         "build": BUILD,
@@ -478,6 +492,10 @@ def export():
 def restore(data: dict = Body(...)):
     if not all(t in data for t in TABLES if t not in NEWER):
         raise HTTPException(400, "Kein HomeAtlas- oder LabVis-Export")
+    try:                                                     # Stand vor dem Einspielen sichern
+        backup.snapshot("restore")
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(500, f"Sicherung vor dem Wiederherstellen fehlgeschlagen, nichts geändert: {e}") from e
     with db.conn() as c:
         for t in TABLES:
             c.execute(f"DELETE FROM {t}")
