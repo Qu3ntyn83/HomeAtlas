@@ -79,6 +79,8 @@ Vollständige Übersicht, was HomeAtlas kann. Einrichtung und Betrieb stehen in 
 
 - Racks mit beliebig vielen HE, Geräte per Ziehen umsetzen, freie HE antippen zum Einbauen
 - Platzhalter: **Patchpanel** (mit Portzahl), **Rackboden** (mit den Geräten darauf), **Blende**, **Kabelführung**
+- **Patchpanel-Ports beschriften:** je Port Beschriftung (Dose/Ziel), Endgerät, Switch und Switch-Port, Notiz; Port antippen oder alle als
+  Liste („7: Büro 2“) bearbeiten; belegte Ports grün im Rack, Patchpanel-Port am Endgerät und am Switch sichtbar, Beschriftungen in der Suche
 - Geräte ohne eigenen Raum übernehmen den Standort ihres Racks
 
 ## Netzwerke & WLAN
@@ -120,7 +122,10 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 - **Übersicht** nach dem Vorbild von [Overlook](https://github.com/bnlqn/overlook): was ist los, Zustand je Bereich, letzte 30 Ergebnisse,
   Verfügbarkeit 24 h, Ereignisse der Woche; Zahl der Probleme im Menü
 - Problem erst nach zwei Fehlschlägen; erneute Prüfung nach 15 Sekunden; „noch nie erreichbar“ meldet nichts und lässt sich gesammelt entfernen
-- **Benachrichtigung** per ntfy oder Webhook, gebündelt, mit Testmeldung
+- **Benachrichtigungen** an beliebig viele Ziele: ntfy, Gotify, Telegram, Discord, Slack/Mattermost/Rocket.Chat, Webhook (Text oder JSON),
+  E-Mail (SMTP). Je Ziel: Bereiche, nur Ausfälle/nur Wiederkehr, **Ruhezeit** (z. B. 22:00–07:00, auch nur für bestimmte Bereiche),
+  Meldungen aus der Ruhezeit danach gesammelt oder gar nicht; gebündelt, Testmeldung je Ziel, letzter Fehler am Ziel sichtbar.
+  Eine bisher eingetragene ntfy-/Webhook-Adresse wird beim Update als Ziel übernommen
 - **Gatus-Export** der Checks
 - Verlauf: Einzelergebnisse 12 Stunden, Stundenwerte 8 Tage, Ereignisse 30 Tage
 
@@ -131,6 +136,8 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 - Erkennung von Typ und Icon (Fingerprints + Erkennungsregeln der Gerätetypen) und **Vorschläge für passende Anbindungen**
 - Bekannte Geräte werden über MAC bzw. IP wiedererkannt und bekommen ihren Online-Status
 - **Funde:** übernehmen, als weitere Adresse an ein Gerät hängen, verwerfen; Suche
+- **Nicht mehr gesehen:** Geräte, die seit 7–180 Tagen (wählbar) nicht mehr erreichbar waren, mit Herkunft und Zahl der Geräte darunter;
+  löschen (einzeln oder alle), „Behalten“ für Saisongeräte, alte Funde gesammelt verwerfen. Nur dokumentierte Geräte ohne Sichtung zählen nicht
 
 ## Anbindungen
 
@@ -144,6 +151,7 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 | **QNAP QTS / QuTS hero** | Modell, Firmware, Netzwerkkarten, CPU, RAM, Platten mit SMART, Volumes | – |
 | **Synology DSM** | Modell, DSM-Version, Netzwerkkarten, CPU, RAM, Platten, Volumes mit RAID-Typ | – |
 | **IPMI / Redfish** | Mainboard, BIOS/BMC-Version, Zustand, Temperaturen, Lüfter, Leistung, Netzteile; BMC-Adresse am Server | – |
+| **UniFi Network** | Gateway, Switches, APs mit Modell, Firmware, Status und Uplinks (Kabel mit Ports, Mesh per WLAN); Clients → vorhandenen Geräten zugeordnet (MAC/IP) mit Kabel zum Switch-Port bzw. WLAN mit SSID zum AP; SSIDs; auf Wunsch unbekannte Clients anlegen | – |
 
 - Beim Anlegen ein dokumentiertes Gerät oder einen Fund auswählen; passende Treffer markiert
 - Abgleich im festen Takt (unter *System*, Standard 15 Minuten) und „Synchronisieren“ von Hand; verständliche Fehlermeldungen (Port zu, TLS, Rechte, 2FA …)
@@ -174,8 +182,5 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 
 ## Noch nicht umgesetzt
 
-- UniFi-Anbindung (WLAN-Clients, APs, Switch-Ports)
-- Beschriftung einzelner Patchpanel-Ports
 - Anbindungen für TrueNAS, Checkmk, FRITZ!Box (TR-064), Windows
-- Mehrere Benachrichtigungswege und Ruhezeiten in der Überwachung
 - Verschlüsselte Ablage der Zugangsdaten von Anbindungen

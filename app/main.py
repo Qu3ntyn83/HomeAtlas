@@ -13,14 +13,14 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, connectors, db, importer, ipam, monitor, scanner, types
+from . import auth, backup, connectors, db, importer, ipam, monitor, notify, scanner, types
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.27.0"
+VERSION = "0.28.0"
 
 
 def _build_id():
@@ -64,6 +64,7 @@ app.include_router(monitor.router)
 app.include_router(ipam.router)
 app.include_router(types.router)
 app.include_router(backup.router)
+app.include_router(notify.router)
 
 
 def _scheduler():
@@ -81,6 +82,7 @@ def startup():
     db.init()
     auth.bootstrap()
     monitor.init()
+    notify.init()
     ICON_CACHE.mkdir(parents=True, exist_ok=True)
     if not db.env("NO_SCHEDULER"):
         threading.Thread(target=_scheduler, daemon=True).start()
@@ -266,6 +268,26 @@ def _approve(d):
         "hostname": d.get("hostname"), "vlan_id": d.get("vlan_id"), "ports": d.get("ports") or [],
         "status": "online", "last_seen": d.get("last_seen"), "source": "scan",
         "meta": {"suggestions": g.get("suggestions", []), "http": d.get("http") or {}}})
+
+
+@app.post("/api/stale/cleanup")
+def cleanup(d: dict = Body(...)):
+    """Aufräumen „Nicht mehr gesehen“: Geräte löschen oder dauerhaft behalten, alte Funde verwerfen."""
+    ids = lambda k: [int(x) for x in d.get(k) or [] if str(x).isdigit()]  # noqa: E731
+    gone = 0
+    for i in ids("delete"):
+        if db.one("SELECT id FROM devices WHERE id=?", (i,)):
+            db.delete_device(i)
+            gone += 1
+    for i in ids("keep") + ids("unkeep"):
+        row = db.one("SELECT meta FROM devices WHERE id=?", (i,))
+        if row:
+            meta = {**(row["meta"] or {}), "stale_keep": i in ids("keep")}
+            db.update("devices", i, {"meta": {k: v for k, v in meta.items() if v is not False}})
+    finds = ids("discard")
+    for i in finds:
+        db.x("DELETE FROM discoveries WHERE id=?", (i,))
+    return {"deleted": gone, "discarded": len(finds)}
 
 
 @app.post("/api/discoveries/{did}/{action}")
@@ -484,6 +506,7 @@ def export():
     data["settings"] = db.settings()
     data["checks"] = db.q("SELECT id, " + ", ".join(monitor.FIELDS) + ", source FROM checks")
     data["types"] = db.q("SELECT * FROM types")
+    data["notifiers"] = db.q("SELECT * FROM notifiers")
     data["icons"] = {f.name: base64.b64encode(f.read_bytes()).decode() for f in sorted(types.UPLOADS.glob("*")) if f.is_file()} if types.UPLOADS.exists() else {}
     return JSONResponse(data, headers={"Content-Disposition": 'attachment; filename="homeatlas-export.json"'})
 
@@ -504,6 +527,13 @@ def restore(data: dict = Body(...)):
                 c.execute(f"INSERT INTO {t}({','.join(cols)}) VALUES({','.join('?' * len(cols))})",
                           [db._enc(row[k]) for k in cols])
         c.execute("DELETE FROM discoveries")
+        if "notifiers" in data:                              # Benachrichtigungsziele (ab 0.28)
+            c.execute("DELETE FROM notifiers")
+            c.execute("DELETE FROM notify_held")
+            ncols = [r[1] for r in c.execute("PRAGMA table_info(notifiers)")]
+            for row in data["notifiers"]:
+                cols = [k for k in row if k in ncols]
+                c.execute(f"INSERT INTO notifiers({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [row[k] for k in cols])
         if "types" in data:                                  # ältere Exporte kennen keine eigenen Typen
             c.execute("DELETE FROM types")
             for row in data["types"]:

@@ -7,6 +7,7 @@ opnsense – API-Key/Secret: VLANs, Subnetze, DNS, DHCP, ARP, Gateways (IPAM & D
 """
 import base64
 import http.client
+import http.cookiejar
 import ipaddress
 import json
 import re
@@ -57,6 +58,16 @@ KINDS = {
         "help": "Liest über Redfish, die HTTPS-Schnittstelle des BMC. Lege im IPMI einen eigenen Benutzer mit der Stufe „Operator“ oder "
                 "„ReadOnly“ an. Bei „Gehört zu Gerät“ den Server wählen, zu dem der BMC gehört – die IPMI-Adresse wird dann dessen "
                 "zusätzliche Adresse. Ältere Boards (z. B. Supermicro X10) brauchen dafür eine aktuelle BMC-Firmware."},
+    "unifi": {"label": "UniFi Network", "fields": [
+        ["host", "Adresse der Konsole/des Controllers (https://192.168.1.1)"], ["port", "Port (UniFi OS 443, klassisch 8443)", "443"],
+        ["site", "Standort-ID", "default"], ["api_key", "API-Key (UniFi OS, empfohlen)", "", "password"],
+        ["user", "oder: lokaler Benutzer"], ["password", "Passwort", "", "password"],
+        ["clients", "Unbekannte Clients als Geräte anlegen (Bereich „UniFi-Clients“)", "", "check"]],
+        "help": "Liest Access Points, Switches und Gateway mit ihren Uplinks sowie die verbundenen Clients. Clients werden vorhandenen "
+                "Geräten über MAC oder IP zugeordnet und bekommen ihre Verbindung: per Kabel mit Switch-Port, per WLAN mit SSID zum "
+                "Access Point. Am besten einen API-Key nehmen (UniFi OS: Network → Einstellungen → Control Plane → Integrationen). "
+                "Ohne API-Key einen lokalen Benutzer mit der Rolle „Nur ansehen“ anlegen; Ubiquiti-Konten mit Zwei-Faktor gehen nicht. "
+                "Von Hand dokumentierte Verbindungen haben Vorrang."},
     "homeassistant": {"label": "Home Assistant", "fields": [
         ["host", "URL (http://homeassistant:8123)"], ["token", "Langlebiges Zugriffstoken", "", "password"]]},
 }
@@ -136,10 +147,12 @@ def vlan_for_ip(ip):
     return None
 
 
-def _upsert(integ, ext_id, data, adopt_ip=None, adopt_name=None):
+def _upsert(integ, ext_id, data, adopt_ip=None, adopt_name=None, adopt_mac=None):
     """Gerät dieser Anbindung anlegen/aktualisieren; vorhandene (gescannte) Geräte werden übernommen."""
     dev = db.one("SELECT * FROM devices WHERE integration_id=? AND ext_id=?", (integ["id"], ext_id))
     adopted = not dev
+    if not dev and adopt_mac:
+        dev = db.one("SELECT * FROM devices WHERE lower(mac)=lower(?) AND integration_id IS NULL", (adopt_mac,))
     if not dev and adopt_ip:
         dev = db.one("SELECT * FROM devices WHERE ip=? AND integration_id IS NULL", (adopt_ip,))
     if not dev and adopt_name:
@@ -1176,8 +1189,286 @@ def sync_homeassistant(integ):
     return f"{new} neu, {upd} aktualisiert, {linked} mit vorhandenen Geräten verknüpft ({', '.join(sorted(chosen))})"
 
 
+# ------------------------------------------------------------------ UniFi Network
+UNIFI_TYPES = {"uap": "ap", "usw": "switch", "ugw": "router", "uxg": "router", "udm": "router", "ucg": "router", "uck": "server",
+               "usp": "plug", "ubb": "ap", "uph": "client"}
+
+
+class UniFiClient:
+    """UniFi Network: UniFi OS (UDM, UCG, Cloud Key Gen2+, Network Server ab 8.x) mit API-Key oder Benutzer,
+    klassischer Controller (Port 8443) mit Benutzer. Gelesen wird über die bewährten /stat-Schnittstellen."""
+
+    def __init__(self, c):
+        raw = (c.get("host") or "").strip()
+        self.scheme, self.host, self.port = endpoint(c, 443)
+        if "://" not in raw and str(self.port) == "80":
+            self.scheme = "http"
+        self.site = (c.get("site") or "default").strip() or "default"
+        self.key = (c.get("api_key") or "").strip()
+        self.user, self.pw = (c.get("user") or "").strip(), c.get("password") or ""
+        if not self.key and not (self.user and self.pw):
+            raise RuntimeError("API-Key oder Benutzer und Passwort fehlen")
+        self.base = f"{self.scheme}://{self.host}:{self.port}"
+        self.jar = http.cookiejar.CookieJar()
+        self.op = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=_CTX),
+                                              urllib.request.HTTPCookieProcessor(self.jar))
+        self.csrf, self.prefix, self.os = None, "", True
+
+    def _req(self, method, path, body=None):
+        h = {"Accept": "application/json"}
+        if body is not None:
+            h["Content-Type"] = "application/json"
+        if self.key:
+            h["X-API-KEY"] = self.key
+        if self.csrf:
+            h["X-CSRF-Token"] = self.csrf
+        req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None,
+                                     method=method, headers=h)
+        with self.op.open(req, timeout=20) as r:
+            self.csrf = r.headers.get("X-CSRF-Token") or r.headers.get("X-Updated-CSRF-Token") or self.csrf
+            txt = r.read().decode() or "{}"
+        try:
+            return json.loads(txt)
+        except ValueError:
+            raise RuntimeError("UniFi: unerwartete Antwort – ist das die Adresse der UniFi-Konsole bzw. des Controllers?") from None
+
+    def login(self):
+        reach(self.host, self.port)
+        if self.key:                                  # API-Key gibt es nur unter UniFi OS
+            self.prefix = "/proxy/network"
+            return
+        try:
+            self._req("POST", "/api/auth/login", {"username": self.user, "password": self.pw, "rememberMe": False})
+            self.prefix = "/proxy/network"
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen. Es muss ein lokales Konto sein, "
+                                   "Ubiquiti-Konten mit Zwei-Faktor gehen nicht") from None
+            if e.code not in (404, 405):
+                raise RuntimeError(explain(e, "UniFi")) from None
+            try:                                      # klassischer Controller
+                self._req("POST", "/api/login", {"username": self.user, "password": self.pw})
+                self.prefix, self.os = "", False
+            except urllib.error.HTTPError as e2:
+                if e2.code in (400, 401, 403):
+                    raise RuntimeError("UniFi: Anmeldung am Controller abgelehnt – Benutzer/Passwort prüfen") from None
+                raise RuntimeError(explain(e2, "UniFi")) from None
+
+    def get(self, what):
+        try:
+            r = self._req("GET", f"{self.prefix}/api/s/{urllib.parse.quote(self.site)}/{what}")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise RuntimeError(f"UniFi: Standort „{self.site}“ nicht gefunden oder Schnittstelle {what} fehlt – "
+                                   "Standort-ID steht in der Adresszeile der Weboberfläche (…/manage/<ID>/…)") from None
+            raise RuntimeError(explain(e, "UniFi")) from None
+        if isinstance(r, dict) and (r.get("meta") or {}).get("rc") not in (None, "ok"):
+            raise RuntimeError("UniFi: " + str((r.get("meta") or {}).get("msg") or "Fehler"))
+        return r.get("data", []) if isinstance(r, dict) else r
+
+    def logout(self):
+        if self.key:
+            return
+        try:
+            self._req("POST", "/api/auth/logout" if self.os else "/api/logout", {})
+        except Exception:  # noqa: BLE001 – Abmelden ist best effort
+            pass
+
+
+def _mac(m):
+    return (m or "").strip().lower()
+
+
+def unifi_port_name(dev, idx):
+    for p in (dev or {}).get("port_table") or []:
+        if p.get("port_idx") == idx:
+            n = (p.get("name") or "").strip()
+            return n if n and n.lower() != f"port {idx}" else f"Port {idx}"
+    return f"Port {idx}" if idx else ""
+
+
+def unifi_parse(devices, clients, wlans=None):
+    """Antworten → Infrastruktur, Clients, Verbindungen. Getrennt vom Abruf, damit es testbar bleibt."""
+    by_mac = {_mac(d.get("mac")): d for d in devices}
+    infra = []
+    for d in devices:
+        t = (d.get("type") or "").lower()
+        infra.append({"mac": _mac(d.get("mac")), "name": d.get("name") or d.get("hostname") or d.get("model") or d.get("mac"),
+                      "ip": d.get("ip") or "", "type": UNIFI_TYPES.get(t, "other"), "kind": t,
+                      "model": d.get("model_name") or d.get("model") or "", "fw": d.get("version") or "",
+                      "online": d.get("state") == 1, "ports": len(d.get("port_table") or []),
+                      "clients": d.get("num_sta") or (d.get("user-num_sta") or 0) + (d.get("guest-num_sta") or 0)})
+    links = []
+    for d in devices:
+        up = d.get("uplink") or d.get("last_uplink") or {}
+        um = _mac(up.get("uplink_mac"))
+        if not um or um not in by_mac or um == _mac(d.get("mac")):
+            continue
+        wireless = (up.get("type") or "") == "wireless"
+        links.append({"a": um, "b": _mac(d.get("mac")), "kind": "wlan" if wireless else "cable",
+                      "a_port": "" if wireless else unifi_port_name(by_mac[um], up.get("uplink_remote_port")),
+                      "b_port": "" if wireless else unifi_port_name(d, up.get("port_idx")),
+                      "speed": speed_label(up.get("speed")) if not wireless else "", "ssid": up.get("essid") or ""})
+    cl = []
+    for c in clients:
+        m = _mac(c.get("mac"))
+        if not m or m in by_mac:
+            continue
+        wired = bool(c.get("is_wired"))
+        via = _mac(c.get("sw_mac") if wired else c.get("ap_mac"))
+        item = {"mac": m, "ip": c.get("ip") or c.get("fixed_ip") or "", "name": c.get("name") or c.get("hostname") or "",
+                "hostname": c.get("hostname") or "", "vendor": c.get("oui") or "", "wired": wired, "via": via if via in by_mac else "",
+                "port": unifi_port_name(by_mac.get(via), c.get("sw_port")) if wired and c.get("sw_port") else "",
+                "ssid": c.get("essid") or "", "signal": c.get("signal") or c.get("rssi"), "network": c.get("network") or "",
+                "vlan": c.get("vlan"), "speed": speed_label(c.get("wired_rate_mbps")) if wired and c.get("wired_rate_mbps") else ""}
+        cl.append(item)
+    ws = [{"ssid": w.get("name"), "security": (w.get("security") or "") + ("/" + w["wpa_mode"] if w.get("wpa_mode") else ""),
+           "enabled": w.get("enabled", True)} for w in (wlans or []) if w.get("name")]
+    return {"infra": infra, "links": links, "clients": cl, "wlans": ws}
+
+
+def _unifi_link(integ, a_id, b_id, kind, a_port="", b_port="", speed="", wlan_id=None, managed=()):
+    """Verbindung der Anbindung setzen. Ein Gerät hängt immer nur an einer Stelle: alte UniFi-Verbindungen dieses
+    Geräts werden ersetzt. Von Hand dokumentierte Verbindungen haben Vorrang und werden nicht verdoppelt."""
+    manual = db.one("SELECT id, a_id, a_port, b_port FROM links WHERE source<>'unifi' AND kind=? AND "
+                    "((a_id=? AND b_id=?) OR (a_id=? AND b_id=?))", (kind, a_id, b_id, b_id, a_id))
+    if manual:
+        if kind == "cable" and (a_port or b_port):        # fehlende Portangaben ergänzen
+            mine_a = manual["a_id"] == a_id
+            pa, pb = (a_port, b_port) if mine_a else (b_port, a_port)
+            upd = {k: v for k, v in (("a_port", pa), ("b_port", pb)) if v and not manual[k]}
+            if upd:
+                db.update("links", manual["id"], upd)
+        db.x("DELETE FROM links WHERE source='unifi' AND b_id=? AND kind IN ('cable','wlan')", (b_id,))
+        return 0
+    if kind == "wlan" and managed and db.one(
+            "SELECT id FROM links WHERE source<>'unifi' AND kind='wlan' AND ((a_id=? AND b_id IN (%s)) OR (b_id=? AND a_id IN (%s)))"
+            % (",".join("?" * len(managed)), ",".join("?" * len(managed))), (b_id, *managed, b_id, *managed)):
+        return 0                                         # von Hand einem anderen AP zugeordnet: nicht anfassen
+    ex = db.one("SELECT id FROM links WHERE source='unifi' AND a_id=? AND b_id=? AND kind=?", (a_id, b_id, kind))
+    db.x("DELETE FROM links WHERE source='unifi' AND b_id=? AND kind IN ('cable','wlan') AND id<>?", (b_id, ex["id"] if ex else 0))
+    data = {"a_port": a_port, "b_port": b_port, "speed": speed or ("1G" if kind == "cable" else ""), "wlan_id": wlan_id}
+    if ex:
+        db.update("links", ex["id"], data)
+        return 0
+    db.insert("links", {"a_id": a_id, "b_id": b_id, "kind": kind, "source": "unifi", **data})
+    return 1
+
+
+def sync_unifi(integ):
+    c = integ["config"]
+    cli = UniFiClient(c)
+    cli.login()
+    try:
+        devices = cli.get("stat/device")
+        clients = cli.get("stat/sta")
+        try:
+            wlans = cli.get("rest/wlanconf")
+        except RuntimeError:
+            wlans = []                                   # Leserecht auf WLAN-Einstellungen ist nicht nötig
+    finally:
+        cli.logout()
+    data = unifi_parse(devices, clients, wlans)
+    url = f"{cli.scheme}://{cli.host}:{cli.port}"
+    now = db.now()
+    ids, seen = {}, set()
+    for d in data["infra"]:
+        ext = "unifi/" + d["mac"]
+        seen.add(ext)
+        ids[d["mac"]] = _upsert(integ, ext, {
+            "name": d["name"], "type": d["type"], "model": d["model"], "os": f"UniFi {d['fw']}".strip(), "ip": d["ip"] or None,
+            "mac": d["mac"], "vendor": "Ubiquiti", "icon": "unifi", "url": url,
+            "status": "online" if d["online"] else "offline", "last_seen": now if d["online"] else None,
+            "meta": {"unifi": {"kind": d["kind"], "ports": d["ports"], "clients": d["clients"]}}}, adopt_ip=d["ip"] or None, adopt_mac=d["mac"])
+    _prune(integ, "unifi/", seen)
+    managed = tuple(ids.values())
+    # WLANs: fehlende SSIDs anlegen, leere Angaben ergänzen
+    wl = {}
+    for w in data["wlans"]:
+        row = db.one("SELECT * FROM wlans WHERE ssid=?", (w["ssid"],))
+        if row:
+            if not row.get("security") and w["security"]:
+                db.update("wlans", row["id"], {"security": w["security"]})
+            wl[w["ssid"]] = row["id"]
+        else:
+            wl[w["ssid"]] = db.insert("wlans", {"ssid": w["ssid"], "security": w["security"], "note": "aus UniFi"})
+
+    def wlan_id(ssid):
+        if not ssid:
+            return None
+        if ssid not in wl:
+            row = db.one("SELECT id FROM wlans WHERE ssid=?", (ssid,))
+            wl[ssid] = row["id"] if row else db.insert("wlans", {"ssid": ssid, "note": "aus UniFi"})
+        return wl[ssid]
+
+    made = 0
+    for ln in data["links"]:
+        a, b = ids.get(ln["a"]), ids.get(ln["b"])
+        if a and b:
+            made += _unifi_link(integ, a, b, ln["kind"], ln["a_port"], ln["b_port"], ln["speed"],
+                                wlan_id(ln["ssid"]) if ln["kind"] == "wlan" else None)
+    # Clients: vorhandenen Geräten zuordnen (MAC, dann IP), auf Wunsch unbekannte anlegen
+    create = str(c.get("clients") or "") in ("1", "true", "on", "True")
+    group = None
+    matched = new = 0
+    for cl in data["clients"]:
+        own = db.one("SELECT id FROM devices WHERE integration_id=? AND ext_id=?", (integ["id"], "unifi-client/" + cl["mac"]))
+        dev = None if own else db.one("SELECT * FROM devices WHERE lower(mac)=? AND type<>'group'", (cl["mac"],))
+        if not dev and not own and cl["ip"]:
+            dev = db.one("SELECT * FROM devices WHERE ip=? AND type NOT IN ('group','vm','container','app','service') "
+                         "AND (mac IS NULL OR mac='')", (cl["ip"],))
+        if dev:
+            upd = {"status": "online", "last_seen": now}
+            for k in ("mac", "vendor", "hostname"):
+                if cl[k] and not dev.get(k):
+                    upd[k] = cl[k]
+            if cl["ip"] and not dev.get("ip"):
+                upd["ip"] = cl["ip"]
+            upd["meta"] = {**(dev.get("meta") or {}), "unifi_client": {"ssid": cl["ssid"], "signal": cl["signal"], "network": cl["network"],
+                                                                        "seen": now, "wired": cl["wired"]}}
+            db.update("devices", dev["id"], upd)
+            matched += 1
+            did = dev["id"]
+        elif create or own:
+            if group is None and not own:
+                g = db.one("SELECT id FROM devices WHERE integration_id=? AND ext_id='unifi-group/clients'", (integ["id"],))
+                group = g["id"] if g else db.insert("devices", {"name": "UniFi-Clients", "type": "group", "icon": "unifi",
+                                                                "source": "unifi", "integration_id": integ["id"], "ext_id": "unifi-group/clients"})
+            info = {"unifi_client": {"ssid": cl["ssid"], "signal": cl["signal"], "network": cl["network"], "seen": now, "wired": cl["wired"]}}
+            if own:                                      # Name, Typ und Platz gehören nach dem Anlegen dem Nutzer
+                cur = db.one("SELECT meta FROM devices WHERE id=?", (own["id"],))
+                db.update("devices", own["id"], {"status": "online", "last_seen": now, "ip": cl["ip"] or None,
+                                                 "meta": {**((cur or {}).get("meta") or {}), **info}})
+                did = own["id"]
+                matched += 1
+            else:
+                did = _upsert(integ, "unifi-client/" + cl["mac"], {
+                    "name": cl["name"] or cl["hostname"] or cl["mac"], "type": "client", "ip": cl["ip"] or None, "mac": cl["mac"],
+                    "vendor": cl["vendor"] or None, "hostname": cl["hostname"] or None, "status": "online", "last_seen": now,
+                    "parent_id": group, "meta": info})
+                new += 1
+        else:
+            continue
+        via = ids.get(cl["via"])
+        if via and via != did:
+            made += _unifi_link(integ, via, did, "cable" if cl["wired"] else "wlan", cl["port"] if cl["wired"] else "", "",
+                                cl["speed"], None if cl["wired"] else wlan_id(cl["ssid"]), managed)
+    # angelegte Clients, die gerade nicht verbunden sind: offline (sie werden nicht gelöscht, siehe „Nicht mehr gesehen“)
+    live = {"unifi-client/" + cl["mac"] for cl in data["clients"]}
+    for d in db.q("SELECT id, ext_id FROM devices WHERE integration_id=? AND ext_id LIKE 'unifi-client/%' AND status<>'offline'", (integ["id"],)):
+        if d["ext_id"] not in live:
+            db.update("devices", d["id"], {"status": "offline"})
+    aps = sum(1 for d in data["infra"] if d["type"] == "ap")
+    sws = sum(1 for d in data["infra"] if d["type"] == "switch")
+    off = sum(1 for d in data["infra"] if not d["online"])
+    rest = len(data["clients"]) - matched - new
+    return (f"{len(data['infra'])} UniFi-Geräte ({aps} APs, {sws} Switches{f', {off} offline' if off else ''}), "
+            f"{len(data['clients'])} Clients: {matched} zugeordnet" + (f", {new} angelegt" if new else "") +
+            (f", {rest} unbekannt" if rest and not create else "") + f" · {made} neue Verbindungen")
+
+
 SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap, "synology": sync_synology, "ipmi": sync_ipmi,
-        "homeassistant": sync_homeassistant}
+        "homeassistant": sync_homeassistant, "unifi": sync_unifi}
 
 
 def sync(integ_id):

@@ -29,13 +29,13 @@ Home Assistant, NAS und IPMI.
 | **Topologie** | Ordner-Karten, Kabelbreite = Geschwindigkeit, VLAN-Farben, VMs/Container als Chips, Räume mit Etagen, Bereiche, Größe ziehbar, SVG-Export |
 | **Verbindungen** | Kabel, WLAN, WAN, API, logisch und Smarthome: Zigbee, Z-Wave, Thread, Matter, BLE, DECT, Homematic IP, EnOcean, 433/868 MHz, LoRa, IR, MQTT, KNX, Feldbus, USB |
 | **Geräte** | mehrere Adressen je Gerät, Zusammenführen, Notizen, Sammeländerung, eigene Gerätetypen und hochgeladene Icons |
-| **Racks** | HE-genau, Patchpanels, Rackböden, Blenden, Kabelführungen |
+| **Racks** | HE-genau, Patchpanels mit beschrifteten Ports, Rackböden, Blenden, Kabelführungen |
 | **Netzwerke** | VLANs, IP-Raster und Adress-Tabelle mit CSV-Export, WLANs/SSIDs |
 | **IPAM & DNS** | Adresskarte je Netz, Konflikte, nächste freie Adresse, DNS-Abgleich; DNS-Einträge und DHCP-Reservierungen direkt in der OPNsense anlegen |
 | **Internetzugang** | Anbieter, Zugang, Bandbreite, IP-Art je Leitung; Zustand, Latenz und WAN-Adresse live aus der OPNsense |
-| **Überwachung** | Checks aus der Dokumentation erzeugen, Übersicht nach Overlook-Vorbild, ntfy/Webhook, Gatus-Export |
-| **Scan** | nmap mit Port-, Web- und SNMP-Erkennung, MACs anderer VLANs über die ARP-Tabelle der Firewall |
-| **Anbindungen** | Proxmox, Docker (lokal oder per Proxy), SNMP/LLDP, OPNsense, Home Assistant, QNAP, Synology, IPMI/Redfish |
+| **Überwachung** | Checks aus der Dokumentation erzeugen, Übersicht nach Overlook-Vorbild, Benachrichtigung an ntfy, Gotify, Telegram, Discord, Slack, Webhook, E-Mail mit Ruhezeiten, Gatus-Export |
+| **Scan** | nmap mit Port-, Web- und SNMP-Erkennung, MACs anderer VLANs über die ARP-Tabelle der Firewall, Aufräumen „Nicht mehr gesehen“ |
+| **Anbindungen** | Proxmox, Docker (lokal oder per Proxy), SNMP/LLDP, OPNsense, UniFi, Home Assistant, QNAP, Synology, IPMI/Redfish |
 | **Oberfläche** | einklappbares Menü mit eigenen Links, Suchfelder in allen Auswahllisten, Handy-tauglich, Benutzer mit Lese-/Schreib-/Admin-Recht |
 
 Die vollständige Liste steht in **[FEATURES.md](FEATURES.md)**.
@@ -61,7 +61,7 @@ Danach `http://<host>:8099` öffnen. Alle Daten liegen in `./data`.
 | `./data:/data` | Volume | Datenbank, Icon-Zwischenspeicher, hochgeladene Icons |
 | `/var/run/docker.sock` | Volume (`:ro`) | lokaler Docker für die Docker-Anbindung; Zeile entfernen, wenn nicht gewünscht |
 
-Scan-Takt, Abgleich der Anbindungen, SNMP-Community, Titel und Benachrichtigungs-Adresse stehen unter *System*.
+Scan-Takt, Abgleich der Anbindungen, SNMP-Community, Titel, Benachrichtigungen und Sicherungen stehen unter *System*.
 
 Der Container läuft im **Host-Netz** mit `NET_RAW`/`NET_ADMIN`: Nur so liefert der Scan MAC-Adressen im eigenen Netz und Ping funktioniert.
 Für andere VLANs muss die Firewall den Zugriff vom HomeAtlas-Host erlauben; MAC-Adressen kommen dort aus der ARP-Tabelle der OPNsense.
@@ -136,6 +136,15 @@ und Subnetze sowie alles für *IPAM & DNS* und *Internetzugang*. Mit dem Haken �
 erlauben“ (und Schreibrechten des API-Benutzers) kann HomeAtlas DNS-Einträge und Reservierungen anlegen, ändern und löschen.
 Ohne TLS gehen API-Schlüssel unverschlüsselt durchs Netz – für den Schreibzugriff die Weboberfläche besser auf HTTPS umstellen.
 
+**UniFi Network** – Adresse der Konsole (UDM, UCG, Cloud Key) bzw. des Controllers, Port 443 (UniFi OS) oder 8443 (klassischer
+Controller), Standort-ID (meist `default`, steht in der Adresszeile unter `/manage/<ID>/`). Am besten ein API-Key (Network → Einstellungen →
+Control Plane → Integrationen); sonst ein lokaler Benutzer mit der Rolle „Nur ansehen“ – Ubiquiti-Konten mit Zwei-Faktor gehen nicht.
+Gelesen werden Gateway, Switches und Access Points samt Uplinks (Kabel mit Port, Mesh per WLAN) und die verbundenen Clients. Clients werden
+vorhandenen Geräten über MAC oder IP zugeordnet und bekommen ihre Verbindung: per Kabel zum Switch-Port oder per WLAN mit SSID zum AP.
+Roamt ein Gerät, wandert die Verbindung mit; von Hand dokumentierte Verbindungen haben Vorrang (fehlende Ports werden dort ergänzt).
+Mit dem Haken „Unbekannte Clients als Geräte anlegen“ landen alle übrigen im Bereich „UniFi-Clients“; Name, Typ und Platz kannst du danach
+frei ändern, sie werden nicht überschrieben.
+
 **Home Assistant** – URL (`http://<ha>:8123`) und ein langlebiges Zugriffstoken (HA: Profil → Sicherheit). Der erste Abruf zeigt nur,
 welche Integrationen wie viele Geräte haben. Unter *Bearbeiten* wählst du aus, welche übernommen werden (z. B. `hue`, `tplink`,
 `smartthings`, `roborock`). Danach gilt:
@@ -158,7 +167,7 @@ wählen: die BMC-Adresse wird dann dessen zusätzliche Adresse „IPMI“, die K
 ## Typische Abläufe
 
 - **Erster Überblick:** Netzwerke mit Subnetz anlegen → Scan → unter *Funde* übernehmen → Anbindungen einrichten → *Auto-Layout*.
-- **Monitoring aufbauen:** *Überwachung → Aus Dokumentation erzeugen*, Bereiche wählen; unter *System* ntfy-Adresse eintragen.
+- **Monitoring aufbauen:** *Überwachung → Aus Dokumentation erzeugen*, Bereiche wählen; unter *System → Benachrichtigungen* ein Ziel anlegen, z. B. ntfy mit Ruhezeit 22–7 Uhr für Smarthome.
 - **DNS aufräumen:** *IPAM & DNS → DNS*: veraltete Einträge mit „auf … ändern“ korrigieren, fehlende Geräte auswählen und gesammelt anlegen.
 - **Eigenen Gerätetyp:** *System → Typen & Icons verwalten → + Eigener Typ*, Icon direkt im Icon-Feld hochladen.
 - **Import aus homelab-diagram:** *System → inventory.yaml importieren* (VLANs, Firewall, Switch-Ports, Geräte, Server mit Gästen und Apps, Kabel).
@@ -189,7 +198,7 @@ Für eine vollständige Sicherung genügt auch eine Kopie von `./data` bei gesto
 - Der eingebundene Docker-Socket entspricht Root-Rechten auf dem Host, auch schreibgeschützt; HomeAtlas sendet nur lesende Abfragen.
 - Hochgeladene SVG-Icons werden bereinigt und mit strenger Content-Security-Policy ausgeliefert.
 - Getestet gegen nachgebaute Dienste und im Browser. **Nicht** an echten Geräten getestet: SNMP an realen Switches, OPNsense (inkl. IPAM,
-  Gateways, Schreibzugriff), QNAP, Synology, IPMI/Redfish und der Home-Assistant-Import mit echten Bridges. API-Pfade können je Version abweichen;
+  Gateways, Schreibzugriff), UniFi, QNAP, Synology, IPMI/Redfish, die Benachrichtigungsdienste außer Webhook und E-Mail und der Home-Assistant-Import mit echten Bridges. API-Pfade können je Version abweichen;
   Fehlermeldungen der Anbindungen nennen dann den betroffenen Teil.
 - Service-Icons werden beim ersten Bedarf von [dashboard-icons](https://github.com/homarr-labs/dashboard-icons) geladen und in `data/icons` abgelegt.
 
