@@ -137,9 +137,11 @@ erlauben“ (und Schreibrechten des API-Benutzers) kann HomeAtlas DNS-Einträge 
 Ohne TLS gehen API-Schlüssel unverschlüsselt durchs Netz – für den Schreibzugriff die Weboberfläche besser auf HTTPS umstellen.
 
 **UniFi Network** – Adresse der Konsole (UDM, UCG, Cloud Key) bzw. der selbst betriebenen Network Application. Port 443 (UniFi OS)
-oder 8443 (Network Application, z. B. im Docker – nicht 8080, das ist nur der Inform-Port der Geräte); leer lassen probiert beides und
-merkt sich den gefundenen Port. Standort-ID (meist `default`, steht in der Adresszeile unter `/manage/<ID>/`). Am besten ein API-Key (Network → Einstellungen →
-Control Plane → Integrationen); sonst ein lokaler Benutzer mit der Rolle „Nur ansehen“ – Ubiquiti-Konten mit Zwei-Faktor gehen nicht.
+oder 11443 (UniFi OS Server) oder 8443 (Network Application, z. B. im Docker – nicht 8080, das ist nur der Inform-Port der Geräte);
+leer lassen probiert alle und merkt sich den gefundenen Port. API-Keys gibt es nur unter UniFi OS; für die selbst betriebene
+Network Application einen lokalen Benutzer anlegen. Standort-ID (meist `default`, steht in der Adresszeile unter `/manage/<ID>/`). Unter UniFi OS am besten ein API-Key (Network →
+Einstellungen → Control Plane → Integrationen); sonst ein lokaler Benutzer („Nur lokaler Zugriff“, Rolle „Nur ansehen“) – Ubiquiti-Konten
+mit Zwei-Faktor gehen nicht.
 Gelesen werden Gateway, Switches und Access Points samt Uplinks (Kabel mit Port, Mesh per WLAN) und die verbundenen Clients. Clients werden
 vorhandenen Geräten über MAC oder IP zugeordnet und bekommen ihre Verbindung: per Kabel zum Switch-Port oder per WLAN mit SSID zum AP.
 Roamt ein Gerät, wandert die Verbindung mit; von Hand dokumentierte Verbindungen haben Vorrang (fehlende Ports werden dort ergänzt).
