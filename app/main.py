@@ -13,7 +13,7 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, connectors, db, importer, ipam, monitor, notify, scanner, types
+from . import auth, backup, connectors, db, importer, ipam, monitor, notify, scanner, types, insights
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
@@ -65,6 +65,7 @@ app.include_router(ipam.router)
 app.include_router(types.router)
 app.include_router(backup.router)
 app.include_router(notify.router)
+app.include_router(insights.router)
 
 
 def _scheduler():
