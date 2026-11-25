@@ -57,3 +57,14 @@ def get_impact(device_id: int):
         devices = [dict(r) for r in c.execute("SELECT id, parent_id, type FROM devices")]
         links = [dict(r) for r in c.execute("SELECT a_id, b_id FROM links")]
     return impact(device_id, devices, links)
+
+
+@router.get("/history")
+def get_history(limit: int = 100, before_id: int | None = None):
+    import json
+    limit = max(1, min(limit, 500))
+    rows = db.q("SELECT * FROM infrastructure_history WHERE (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?", (before_id, before_id, limit))
+    for row in rows:
+        for field in ("before_value", "after_value"):
+            row[field] = json.loads(row[field]) if row[field] is not None else None
+    return {"events": rows, "next_before_id": rows[-1]["id"] if len(rows) == limit else None}
