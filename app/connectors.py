@@ -1224,7 +1224,7 @@ class UniFiClient:
         self.csrf = None
 
     def _req(self, method, path, body=None):
-        h = {"Accept": "application/json"}
+        h = {"Accept": "application/json", "Origin": self.base, "Referer": self.base + "/"}
         if body is not None:
             h["Content-Type"] = "application/json"
         if self.key:
@@ -1271,26 +1271,48 @@ class UniFiClient:
                                "der Weboberfläche (…/manage/<ID>/…), meist „default“") from None
         # Erst UniFi OS (/api/auth/login), dann die selbst betriebene Network Application (/api/login). Letztere antwortet
         # auf /api/auth/login mit 401 „LoginRequired“ – das ist kein falsches Passwort, sondern der falsche Weg.
-        rejected = False
+        # Jede Antwort wird mit Status und UniFi-Meldung festgehalten, damit die Fehlermeldung zeigt, was wirklich zurückkam.
+        seen = []
+
+        def why(e, where):
+            body = ""
+            try:
+                body = e.read().decode(errors="ignore")
+            except Exception:  # noqa: BLE001
+                pass
+            msg = ""
+            try:
+                j = json.loads(body)
+                msg = (j.get("meta") or {}).get("msg") or j.get("message") or j.get("code") or ""
+            except ValueError:
+                msg = body.strip().splitlines()[0][:60] if body.strip() else ""
+            seen.append(f"{where}: HTTP {e.code}{' ' + str(msg) if msg else ''}")
+            return str(msg)
+
+        payload = {"username": self.user, "password": self.pw}
         try:
-            self._req("POST", "/api/auth/login", {"username": self.user, "password": self.pw, "rememberMe": False})
+            self._req("POST", "/api/auth/login", {**payload, "rememberMe": False})
             self.prefix, self.os = "/proxy/network", True
             return
         except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                body = e.read().decode(errors="ignore") if hasattr(e, "read") else ""
-                rejected = "LoginRequired" not in body
-            elif e.code not in (404, 405):
+            why(e, "UniFi OS")
+            if e.code not in (400, 401, 403, 404, 405):
                 raise RuntimeError(explain(e, "UniFi")) from None
         try:
-            self._req("POST", "/api/login", {"username": self.user, "password": self.pw})
+            self._req("POST", "/api/login", {**payload, "remember": False})
             self.prefix, self.os = "", False
             return
         except urllib.error.HTTPError as e2:
-            if e2.code in (400, 401, 403) or rejected:
-                raise RuntimeError("UniFi: Anmeldung abgelehnt – Benutzer/Passwort prüfen. Es muss ein lokales Konto sein, "
-                                   "Ubiquiti-Konten mit Zwei-Faktor gehen nicht") from None
-            raise RuntimeError(explain(e2, "UniFi")) from None
+            msg = why(e2, "Network Application")
+            if e2.code not in (400, 401, 403) and not seen[0].startswith("UniFi OS: HTTP 401") and "403" not in seen[0]:
+                raise RuntimeError(explain(e2, "UniFi") + " (" + "; ".join(seen) + ")") from None
+            hint = {"api.err.Invalid": "Benutzername oder Passwort stimmt nicht – Groß-/Kleinschreibung beachten, beim Benutzer "
+                                       "den Anmeldenamen nehmen, nicht die E-Mail",
+                    "api.err.Ubic2faTokenRequired": "das Konto verlangt Zwei-Faktor – einen lokalen Benutzer ohne 2FA anlegen",
+                    "api.err.LoginRequired": "Anmeldung nicht angenommen",
+                    "api.err.TooManyRequests": "zu viele Fehlversuche, ein paar Minuten warten"}.get(msg, "Benutzer/Passwort prüfen; "
+                                                                                                 "es muss ein lokales Konto ohne Zwei-Faktor sein")
+            raise RuntimeError(f"UniFi: Anmeldung abgelehnt – {hint}. Antworten: " + "; ".join(seen)) from None
 
     def login(self):
         tried = []
