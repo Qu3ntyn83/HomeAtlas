@@ -1553,7 +1553,14 @@ def sync_unifi(integ):
             (f", {rest} unbekannt" if rest and not create else "") + f" · {made} neue Verbindungen" + found)
 
 
-SYNC = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap, "synology": sync_synology, "ipmi": sync_ipmi,
+from typing import Protocol
+
+class Connector(Protocol):
+    """Existing connector contract: receive integration record, return status summary."""
+    def __call__(self, integ: dict) -> str: ...
+
+
+SYNC: dict[str, Connector] = {"proxmox": sync_proxmox, "docker": sync_docker, "snmp": sync_snmp, "opnsense": sync_opnsense, "qnap": sync_qnap, "synology": sync_synology, "ipmi": sync_ipmi,
         "homeassistant": sync_homeassistant, "unifi": sync_unifi}
 
 
@@ -1562,9 +1569,12 @@ def sync(integ_id):
     if not integ:
         return "nicht gefunden"
     try:
-        status = "ok · " + SYNC[integ["kind"]](integ)
+        handler = SYNC.get(integ["kind"])
+        if handler is None:
+            raise ValueError("Unbekannte Anbindung")
+        status = "ok · " + handler(integ)
     except Exception as e:  # noqa: BLE001 – Status wird in der Oberfläche angezeigt
-        status = "Fehler: " + explain(e, KINDS[integ["kind"]]["label"])[:300]
+        status = "Fehler: " + explain(e, KINDS.get(integ["kind"], {}).get("label", "Anbindung"))[:300]
     db.x("UPDATE integrations SET last_sync=?, last_status=? WHERE id=?", (db.now(), status, integ_id))
     return status
 

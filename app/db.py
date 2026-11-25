@@ -100,6 +100,7 @@ def conn():
 def init():
     with conn() as c:
         c.executescript(SCHEMA)
+        init_history(c)
         if 'wlan_id' not in [r[1] for r in c.execute("PRAGMA table_info(links)")]:
             c.execute("ALTER TABLE links ADD COLUMN wlan_id INTEGER")
         if 'room' not in [r[1] for r in c.execute("PRAGMA table_info(devices)")]:
@@ -186,3 +187,25 @@ def delete_device(did):
 
 def now():
     return time.time()
+
+
+def init_history(c):
+    """Record selected infrastructure changes, including writes by connectors."""
+    c.execute("""CREATE TABLE IF NOT EXISTS infrastructure_history(
+        id INTEGER PRIMARY KEY AUTOINCREMENT, occurred REAL NOT NULL,
+        entity TEXT NOT NULL, entity_id INTEGER NOT NULL, action TEXT NOT NULL,
+        before_value TEXT, after_value TEXT)""")
+    for table, fields in (("devices", ("name", "ip", "status", "parent_id", "vlan_id")),
+                          ("links", ("a_id", "b_id", "kind", "vlan_id"))):
+        def snapshot(prefix):
+            return "json_object(" + ",".join(f"'{f}',{prefix}.{f}" for f in fields) + ")"
+        for action in ("INSERT", "UPDATE", "DELETE"):
+            before = snapshot("OLD") if action != "INSERT" else "NULL"
+            after = snapshot("NEW") if action != "DELETE" else "NULL"
+            ident = "OLD.id" if action == "DELETE" else "NEW.id"
+            condition = (" WHEN " + " OR ".join(f"OLD.{f} IS NOT NEW.{f}" for f in fields)) if action == "UPDATE" else ""
+            c.execute(f"""CREATE TRIGGER IF NOT EXISTS history_{table}_{action.lower()}
+                AFTER {action} ON {table}{condition} BEGIN
+                INSERT INTO infrastructure_history(occurred,entity,entity_id,action,before_value,after_value)
+                VALUES (CAST(strftime('%s','now') AS REAL),'{table}',{ident},'{action.lower()}',{before},{after});
+                END""")
