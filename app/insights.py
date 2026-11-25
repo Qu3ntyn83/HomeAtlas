@@ -10,8 +10,9 @@ def dashboard(devices, discoveries):
     statuses = defaultdict(int)
     for d in devices:
         statuses[d.get("status") or "unknown"] += 1
-        if d.get("ip"):
-            ips[d["ip"].strip()].append(d["id"])
+        ip = (d.get("ip") or "").strip()
+        if ip:
+            ips[ip].append(d["id"])
     return {"devices": len(devices), "statuses": dict(statuses),
             "pending_discoveries": sum(d.get("state") == "pending" for d in discoveries),
             "duplicate_ips": [{"ip": ip, "device_ids": ids} for ip, ids in sorted(ips.items()) if len(ids) > 1]}
