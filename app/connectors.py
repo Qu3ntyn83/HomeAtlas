@@ -1229,8 +1229,9 @@ class UniFiClient:
             h["Content-Type"] = "application/json"
         if self.key:
             h["X-API-KEY"] = self.key
-        if self.csrf:
-            h["X-CSRF-Token"] = self.csrf
+        csrf = self.csrf or next((c.value for c in self.jar if c.name.lower() == "csrf_token"), None)
+        if csrf:                                      # UniFi verlangt das Token als Kopfzeile, sobald es als Cookie gesetzt ist
+            h["X-CSRF-Token"] = csrf
         req = urllib.request.Request(self.base + path, data=json.dumps(body).encode() if body is not None else None,
                                      method=method, headers=h)
         with self.op.open(req, timeout=20) as r:
@@ -1298,6 +1299,8 @@ class UniFiClient:
             why(e, "UniFi OS")
             if e.code not in (400, 401, 403, 404, 405):
                 raise RuntimeError(explain(e, "UniFi")) from None
+        # Frisch anfangen: Cookies oder CSRF-Token aus dem ersten Versuch lassen die Network Application sonst mit 403 ablehnen
+        self._use(self.scheme, self.port)
         try:
             self._req("POST", "/api/login", {**payload, "remember": False})
             self.prefix, self.os = "", False
