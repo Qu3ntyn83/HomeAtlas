@@ -1,3 +1,27 @@
+
+var insightsGeneration = 0;
+async function renderInsights() {
+  const generation = ++insightsGeneration;
+  main.innerHTML = '<div class="page"><h2>Dashboard</h2><p class="muted">Lade Infrastruktur…</p></div>';
+  try {
+    const [d,h] = await Promise.all([api('GET','/api/insights/dashboard'),api('GET','/api/insights/history?limit=20')]);
+    if (view !== 'insights' || generation !== insightsGeneration) return;
+    const name = id => S.devices.find(x => x.id === id)?.name || 'Gerät #' + id;
+    const cards = [['Geräte',d.devices],['Online',d.statuses.online || 0],['Offline',d.statuses.offline || 0],['Weitere Status',d.devices-(d.statuses.online||0)-(d.statuses.offline||0)],['Neue Funde',d.pending_discoveries],['Doppelte IPs',d.duplicate_ips.length]];
+    main.innerHTML = '<div class="page"><div class="bar"><h2>Dashboard</h2><button class="btn" id="ins-refresh">Aktualisieren</button></div><div class="ins-grid">'+cards.map(([label,value])=>'<div class="ins-card"><span class="muted">'+esc(label)+'</span><strong>'+esc(String(value))+'</strong></div>').join('')+'</div><section class="ins-card"><h3>Potenzielle IP-Konflikte</h3>'+ (d.duplicate_ips.map(x=>'<p>'+esc(x.ip)+' · '+esc(x.device_ids.map(name).join(', '))+'</p>').join('') || '<p class="muted">Keine doppelten IPs gefunden.</p>')+'</section><section class="ins-card"><h3>Impact-Analyse</h3><select id="ins-device"><option value="">Gerät auswählen</option>'+S.devices.map(x=>'<option value="'+Number(x.id)+'">'+esc(x.name)+'</option>').join('')+'</select><div id="ins-impact" aria-live="polite"></div></section><section class="ins-card"><h3>Letzte Änderungen</h3>'+ (h.events.map(e=>'<div class="ins-event"><b>'+esc(e.entity+' #'+e.entity_id+' · '+e.action)+'</b><span class="muted">'+esc(new Date(e.occurred*1000).toLocaleString('de-DE'))+'</span><div>'+esc(JSON.stringify(e.before_value))+' → '+esc(JSON.stringify(e.after_value))+'</div></div>').join('') || '<p class="muted">Noch keine Änderungen erfasst.</p>')+'</section></div>';
+    $('#ins-refresh').onclick = renderInsights;
+    $('#ins-device').onchange = async e => {
+      const select = e.target, id = select.value, out = $('#ins-impact');
+      out.textContent = id ? 'Lade…' : '';
+      if (!id) return;
+      try {
+        const result = await api('GET','/api/insights/impact/'+encodeURIComponent(id));
+        if (!out.isConnected || select.value !== id) return;
+        out.textContent = 'Untergeordnete Geräte: '+(result.contained_device_ids.map(name).join(', ') || 'Keine')+' | Mögliche Netzwerkauswirkungen: '+(result.possible_network_impact_ids.map(name).join(', ') || 'Keine')+'. Keine bestätigte Dienstabhängigkeit.';
+      } catch(err) { if(out.isConnected && select.value===id) out.textContent=err.message; }
+    };
+  } catch(err) { if(view==='insights' && generation===insightsGeneration) main.textContent='Dashboard: '+err.message; }
+}
 /* HomeAtlas – Oberfläche. Kein Build-Schritt, reines JS + SVG. */
 'use strict';
 const PAL = {BG: '#0b0f15', PANEL: '#111821', CHIP: '#19222e', BORDER: '#253042', TEXT: '#e6edf3', MUTED: '#8d9aab',
@@ -190,7 +214,7 @@ async function load(silent) {
 }
 function render() {
   main.className = view === 'topo' ? 'canvas' : '';
-  ({topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, ipam: renderIpam, types: renderTypes, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
+  ({insights: renderInsights, topo: renderTopo, monitor: renderMonitor, racks: renderRacks, nets: renderNets, ipam: renderIpam, types: renderTypes, finds: renderFinds, integ: renderInteg, system: renderSystem})[view]();
 }
 // Seitenmenü: am Desktop ein-/ausklappbar (gemerkt), am Handy als Schublade
 const navStore = v => { try { if (v === undefined) return localStorage.getItem('homeatlas.nav'); localStorage.setItem('homeatlas.nav', v); } catch (e) { /* ohne Speicher gilt die Wahl bis zum Neuladen */ } return null; };
