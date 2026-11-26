@@ -34,6 +34,7 @@ Home Assistant, NAS und IPMI.
 | **IPAM & DNS** | Adresskarte je Netz, Konflikte, nächste freie Adresse, DNS-Abgleich; DNS-Einträge und DHCP-Reservierungen direkt in der OPNsense anlegen |
 | **Internetzugang** | Anbieter, Zugang, Bandbreite, IP-Art je Leitung; Zustand, Latenz und WAN-Adresse live aus der OPNsense |
 | **Überwachung** | Checks aus der Dokumentation erzeugen, Übersicht nach Overlook-Vorbild, Benachrichtigung an ntfy, Gotify, Telegram, Discord, Slack, Webhook, E-Mail mit Ruhezeiten, Gatus-Export |
+| **Updates** | Firmware- und Update-Stände aus UniFi, OPNsense, Proxmox, Synology und Home Assistant, Hinweis am Gerät und per Benachrichtigung, Versionen überspringen |
 | **Scan** | nmap mit Port-, Web- und SNMP-Erkennung, MACs anderer VLANs über die ARP-Tabelle der Firewall, Aufräumen „Nicht mehr gesehen“ |
 | **Anbindungen** | Proxmox, Docker (lokal oder per Proxy), SNMP/LLDP, OPNsense, UniFi, Home Assistant, QNAP, Synology, IPMI/Redfish |
 | **Oberfläche** | einklappbares Menü mit eigenen Links, Suchfelder in allen Auswahllisten, Handy-tauglich, Benutzer mit Lese-/Schreib-/Admin-Recht |
@@ -108,8 +109,9 @@ pveum user token add homeatlas@pve homeatlas --privsep 0
 Token-ID `homeatlas@pve!homeatlas` und das Secret eintragen. Wichtig ist `--privsep 0`: Ein Token mit „Privilege Separation" (Standard in der
 Weboberfläche) erbt die Rechte des Benutzers nicht und sieht dann keine Gäste. Für einen solchen Token die Rolle direkt vergeben:
 `pveum aclmod / -token 'homeatlas@pve!homeatlas' -role PVEAuditor` – HomeAtlas erkennt den Fall und meldet ihn. Gelesen werden Nodes (CPU, RAM, Version), VMs und
-LXC-Container samt IP (bei VMs nur mit QEMU-Guest-Agent). Bereits gescannte Hosts mit gleicher IP oder
-gleichem Namen werden übernommen statt doppelt angelegt.
+LXC-Container samt IP (bei VMs nur mit QEMU-Guest-Agent) und die ausstehenden Paket-Updates je Node. Für die Updates reicht
+PVEAuditor (Sys.Audit) bei aktuellen Versionen; ältere Proxmox-Versionen verlangen dafür Sys.Modify – fehlt das Recht, steht es im Status,
+der Rest funktioniert. Bereits gescannte Hosts mit gleicher IP oder gleichem Namen werden übernommen statt doppelt angelegt.
 
 **Docker** – für den Host, auf dem HomeAtlas selbst läuft: Anbindung „Docker" anlegen und die API-URL **leer lassen**. HomeAtlas liest dann über
 den Docker-Socket, der in der `docker-compose.yml` eingebunden ist (`/var/run/docker.sock`). Das funktioniert neben Dockhand oder Portainer,
@@ -131,7 +133,8 @@ services:
 Stimmt ein Nachbarname mit einem dokumentierten Gerät überein, entsteht daraus ein Kabel mit der ausgehandelten Geschwindigkeit.
 
 **OPNsense** – API-Key und Secret (System → Zugang → Benutzer → API-Schlüssel), Adresse und Port der Weboberfläche (80 = ohne TLS).
-Der API-Benutzer braucht Leserechte auf Schnittstellen/VLANs, Unbound bzw. Dnsmasq, Kea, ARP-Tabelle und Gateways. Gelesen werden VLANs
+Der API-Benutzer braucht Leserechte auf Schnittstellen/VLANs, Unbound bzw. Dnsmasq, Kea, ARP-Tabelle und Gateways, für den Firmware-Stand
+zusätzlich „System: Firmware“. Gelesen werden VLANs
 und Subnetze sowie alles für *IPAM & DNS* und *Internetzugang*. Mit dem Haken „Änderungen an DNS-Einträgen und DHCP-Reservierungen
 erlauben“ (und Schreibrechten des API-Benutzers) kann HomeAtlas DNS-Einträge und Reservierungen anlegen, ändern und löschen.
 Ohne TLS gehen API-Schlüssel unverschlüsselt durchs Netz – für den Schreibzugriff die Weboberfläche besser auf HTTPS umstellen.

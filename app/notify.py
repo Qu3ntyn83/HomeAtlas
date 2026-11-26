@@ -35,7 +35,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS notifiers(
   id INTEGER PRIMARY KEY, name TEXT, kind TEXT NOT NULL, config TEXT DEFAULT '{}', enabled INTEGER DEFAULT 1,
   areas TEXT DEFAULT '[]', events TEXT DEFAULT 'both', quiet_from TEXT, quiet_to TEXT, quiet_areas TEXT DEFAULT '[]',
-  digest INTEGER DEFAULT 1, last_status TEXT, last_sent REAL);
+  digest INTEGER DEFAULT 1, last_status TEXT, last_sent REAL, updates INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS notify_held(id INTEGER PRIMARY KEY, notifier_id INTEGER, ts REAL, text TEXT);
 """
 _CTX = ssl.create_default_context()
@@ -49,6 +49,8 @@ router = APIRouter(prefix="/api/notifiers")
 def init():
     with db.conn() as c:
         c.executescript(SCHEMA)
+        if "updates" not in [r[1] for r in c.execute("PRAGMA table_info(notifiers)")]:   # ab 0.29: Hinweise auf Updates
+            c.execute("ALTER TABLE notifiers ADD COLUMN updates INTEGER DEFAULT 1")
     old = (db.setting("notify_url") or "").strip()          # bisherige einzelne Adresse übernehmen
     if old and not db.one("SELECT id FROM notifiers"):
         kind = "ntfy" if "ntfy" in old else "webhook"
@@ -98,6 +100,8 @@ def quiet_now(n, at=None):
 def wants(n, ev):
     if n.get("areas") and ev.get("area") not in n["areas"]:
         return False
+    if ev.get("event") == "update":
+        return n.get("updates", 1) not in (0, "0", False)
     return n.get("events") in (None, "", "both") or n["events"] == ev.get("event")
 
 
@@ -234,7 +238,8 @@ def _clean(d, old=None):
             "enabled": 1 if d.get("enabled", 1) not in (0, "0", False) else 0,
             "areas": json.dumps([a for a in d.get("areas") or [] if a]), "events": d.get("events") if d.get("events") in ("both", "down", "up") else "both",
             "quiet_from": (d.get("quiet_from") or "").strip() or None, "quiet_to": (d.get("quiet_to") or "").strip() or None,
-            "quiet_areas": json.dumps([a for a in d.get("quiet_areas") or [] if a]), "digest": 1 if d.get("digest", 1) not in (0, "0", False) else 0}
+            "quiet_areas": json.dumps([a for a in d.get("quiet_areas") or [] if a]), "digest": 1 if d.get("digest", 1) not in (0, "0", False) else 0,
+            "updates": 1 if d.get("updates", 1) not in (0, "0", False) else 0}
 
 
 @router.get("")

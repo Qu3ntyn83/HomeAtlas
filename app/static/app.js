@@ -280,6 +280,42 @@ function chipH(c) {
   const g = chipKids(c).length;
   return (c.ip || c.hostname ? 60 : 46) + (memoOn(c) ? 15 : 0) + (g ? g * 19 + 8 : 0);
 }
+// Updates, die Anbindungen am Gerät gemeldet haben (meta.updates), ohne übersprungene Versionen
+const updMark = u => u.latest || (u.count != null ? String(u.count) : '') || '1';
+const updPending = d => { const m = (d && d.meta) || {}, sk = m.update_skip || {}; return (m.updates || []).filter(u => u.available && sk[u.key] !== updMark(u)); };
+const UPD_SRC = {unifi: 'UniFi', opnsense: 'OPNsense', proxmox: 'Proxmox', synology: 'Synology', homeassistant: 'Home Assistant'};
+function updBadge(d, x, y) {
+  const n = updPending(d).length; if (!n) return '';
+  return `<g class="updb"><title>${n} ${n === 1 ? 'Update' : 'Updates'} verfügbar</title><circle cx="${x}" cy="${y}" r="6.5" fill="#d9822b"/>` +
+    `<path d="M${x} ${y + 3.2}V${y - 3}M${x - 2.6} ${y - 0.6}L${x} ${y - 3.2}L${x + 2.6} ${y - 0.6}" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>`;
+}
+function updSection(d) {
+  const all = ((d.meta || {}).updates || []), open = updPending(d); if (!all.length) return '';
+  const sk = (d.meta || {}).update_skip || {};
+  const row = u => {
+    const skipped = u.available && sk[u.key] === updMark(u);
+    const ver = u.available ? `${esc(u.installed || '?')} → <b>${esc(u.latest || (u.count != null ? u.count + ' Pakete' : 'neu'))}</b>` : esc(u.installed || 'aktuell');
+    return `<div class="rowl"><span class="dot ${u.available && !skipped ? 'warn' : 'online'}" style="${u.available && !skipped ? 'background:#d9822b' : ''}"></span>` +
+      `<span style="flex:1;min-width:0">${esc(u.title)} <span class="muted" style="font-size:12px">${ver}${u.count && u.latest ? ` · ${u.count} Pakete` : ''}` +
+      ` · ${esc(UPD_SRC[u.source] || u.source)}${skipped ? ' · übersprungen' : ''}</span></span>` +
+      (u.url ? `<a class="btn sm" href="${esc(u.url)}" target="_blank" rel="noopener">Hinweise</a>` : '') +
+      (ro() || !u.available ? '' : skipped ? `<button class="btn sm" data-act="updSkip" data-id="${d.id}" data-key="${esc(u.key)}" data-undo="1">Wieder melden</button>`
+        : `<button class="btn sm" data-act="updSkip" data-id="${d.id}" data-key="${esc(u.key)}" title="Diese Version nicht mehr melden">Überspringen</button>`) + '</div>';
+  };
+  const ck = Math.max(...all.map(u => u.checked || 0));
+  return `<h3>Updates${open.length ? ` (${open.length} offen)` : ''}</h3>` + all.map(row).join('') +
+    `<div class="muted" style="font-size:12px;margin-top:4px">Stand der eigenen Prüfung der Geräte, abgefragt ${ck ? 'vor ' + ago(ck) : '–'}</div>`;
+}
+function updatesHtml() {
+  const list = S.devices.filter(d => updPending(d).length).sort((a, b) => a.name.localeCompare(b.name));
+  const known = S.devices.filter(d => ((d.meta || {}).updates || []).length).length;
+  if (!known) return `<h3 class="faint" style="margin-top:26px">Updates</h3><div class="hint">Noch keine Update-Stände. Sie kommen von den Anbindungen: UniFi (Firmware), ` +
+    `OPNsense, Proxmox (Pakete), Synology (DSM) und Home Assistant (alle update-Entitäten).</div>`;
+  return `<h3 class="faint" style="margin-top:26px">Updates (${list.length} ${list.length === 1 ? 'Gerät' : 'Geräte'} von ${known} geprüften)</h3>` +
+    (list.length ? '<div class="box">' + list.map(d => `<div class="rowl"><img src="${icon(d)}" width="18" height="18" alt=""><a href="#" data-act="show" data-id="${d.id}">${esc(d.name)}</a>` +
+      `<span class="muted" style="font-size:12px;flex:1;min-width:0">${updPending(d).map(u => `${esc(u.title)} ${esc(u.installed || '')}${u.latest ? ' → ' + esc(u.latest) : u.count ? ` (${u.count} Pakete)` : ''}`).join(' · ')}</span></div>`).join('') + '</div>'
+      : '<div class="hint">Alles aktuell, soweit die Geräte es selbst wissen.</div>');
+}
 function chipSvg(c, x, y, w, parentVlan) {
   const h = chipH(c), col = vcol(c.vlan_id), gk = chipKids(c);
   const stroke = c.vlan_id && c.vlan_id !== parentVlan ? col : PAL.BORDER;
@@ -291,7 +327,7 @@ function chipSvg(c, x, y, w, parentVlan) {
     IMG(c.icon || typeIcon(c.type), 10, 11, 22) +
     T(40, 21, fit(c.name, w - 62 - tagW, 13.5, 600), {size: 13.5, weight: 600}) +
     (tag ? T(w - 22, 20, tag, {size: 10.5, fill: pr && !(c.meta || {}).vmid ? pr.col : PAL.FAINT, mono: true, anchor: 'end'}) : '') +
-    statusDot(c, w - 11, 16, 3.6) +
+    statusDot(c, w - 11, 16, 3.6) + updBadge(c, w - 11, 34) +
     T(40, 36, fit(c.note || c.os || TYPES[c.type] || '', w - 50, 11, 400), {size: 11, fill: PAL.MUTED});
   if (c.ip || c.hostname) {
     const a = c.url && c.hostname ? c.hostname : [c.ip, addrsOf(c).length ? '+' + addrsOf(c).length : '', c.hostname].filter(Boolean).join(' · ');
@@ -364,7 +400,7 @@ function buildCard(d) {
   }
   cw = (w - 2 * PAD - (cols - 1) * GAP) / cols;
   let s = T(16, 21, d.name, {size: 19, weight: 700}) + T(16 + tw(d.name, 19, 700), 21, '\u00a0·\u00a0' + type, {size: 13, weight: 500, fill: PAL.MUTED});
-  s += IMG(d.icon || typeIcon(d.type), 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20));
+  s += IMG(d.icon || typeIcon(d.type), 18, TAB + 15, 38) + (grp ? '' : statusDot(d, w - 18, TAB + 20) + updBadge(d, w - 18, TAB + 38));
   s += T(70, TAB + 29, l1, {size: 14, weight: 500}) + T(70, TAB + 47, addr, {size: 12.5, mono: true, fill: d.vlan_id ? col : PAL.MUTED}) +
     T(70, TAB + 63, l3, {size: 12, fill: PAL.MUTED});
   let y = TAB + 80;
@@ -865,6 +901,7 @@ function showDevice(id, keep) {
     fact('Rack', !rack && shelfOf(d) && `${esc((S.racks.find(r => r.id === shelfOf(d).rack_id) || {}).name)} · auf ${esc(shelfOf(d).name)} (HE ${shelfOf(d).rack_u})`) +
     fact('Offene Ports', (d.ports || []).length ? d.ports.map(p => `<span class="pill">${p}</span>`).join(' ') : '') +
     fact('Quelle', esc({manual: 'manuell', scan: 'Scan', import: 'Import'}[d.source] || d.source)) + '</dl>' + (isNet(d) ? ispSection(d) : '');
+  h += updSection(d);
   h += `<h3>Notizen</h3>` + ((d.memo || '').trim() ? `<div class="memo">${esc(d.memo.trim())}</div>` : '<span class="muted" style="font-size:13px">keine</span>') +
     `<div class="acts"><button class="btn sm" data-act="editMemo" data-id="${id}">${(d.memo || '').trim() ? 'Bearbeiten' : 'Notiz schreiben'}</button>` +
     ((d.memo || '').trim() ? `<button class="btn sm" data-act="memoToggle" data-id="${id}" aria-pressed="${d.memo_show ? 'true' : 'false'}">${d.memo_show ? 'Auf der Karte ausblenden' : 'Auf der Karte einblenden'}</button>` : '') + '</div>';
@@ -1341,7 +1378,7 @@ function monBody() {
   const all = MON.checks, on = all.filter(c => c.enabled), down = on.filter(isProblem), never = on.filter(isNever), wait = on.filter(c => c.status === 'unknown');
   if (!all.length) return `<div class="hint"><b>Noch keine Überwachung.</b><br>HomeAtlas kann aus der Dokumentation Checks ableiten: einen Ping je Gerät mit IP, ` +
     `einen Port-Check je bekanntem Dienst (SSH, Proxmox, SMB …) und einen HTTP-Check je Weboberfläche.` +
-    `<div class="acts"><button class="btn pri" data-act="genChecks">Aus Dokumentation erzeugen</button><button class="btn" data-act="newCheck">+ Check von Hand</button></div></div>`;
+    `<div class="acts"><button class="btn pri" data-act="genChecks">Aus Dokumentation erzeugen</button><button class="btn" data-act="newCheck">+ Check von Hand</button></div></div>` + updatesHtml();
   const f = c => match(monQ, c.device, c.name, c.target, c.port, KINDS_CHECK[c.kind], MON.areas[c.area], c.status === 'down' ? 'ausgefallen problem' : '');
   let h = `<div class="mbanner ${down.length ? 'bad' : 'ok'}"><span class="dot ${down.length ? 'offline' : 'online'}"></span><b>${down.length ? `${down.length} ${down.length === 1 ? 'Problem' : 'Probleme'}` : 'Alles in Ordnung'}</b>` +
     `<span class="muted">${on.length - down.length - never.length - wait.length} von ${on.length} Checks in Ordnung${wait.length ? ` · ${wait.length} noch ohne Ergebnis` : ''}${all.length - on.length ? ` · ${all.length - on.length} pausiert` : ''}` +
@@ -1372,6 +1409,7 @@ function monBody() {
       return head + `<div class="rowl"><span class="dot ${e.kind === 'up' ? 'online' : 'offline'}"></span><span class="mono muted" style="font-size:12px">${new Date(e.ts * 1000).toLocaleTimeString('de-DE', {hour: '2-digit', minute: '2-digit'})}</span>` +
         `${e.device_id && dev(e.device_id) ? `<a href="#" data-act="show" data-id="${e.device_id}">${esc(e.text)}</a>` : esc(e.text)}</div>`; }).join('') + '</div>';
   }
+  h += updatesHtml();
   return h;
 }
 async function renderMonitor() {
@@ -1498,13 +1536,14 @@ function notiForm(n) {
   const areaOpts = Object.entries(AREA_LABEL).map(([a, l]) => [a, l]);
   const cf = k.fields.map(([key, label, def, kind]) => Array.isArray(kind) ? ['cfg_' + key, label, 'select', kind] : ['cfg_' + key, label, kind === 'password' ? 'password' : 'text', def || '']);
   const val = {name: n.name || k.label, enabled: n.enabled ?? 1, events: n.events || 'both', areas: n.areas || [], quiet_from: n.quiet_from || '', quiet_to: n.quiet_to || '',
-    quiet_areas: n.quiet_areas || [], digest: n.digest ?? 1};
+    quiet_areas: n.quiet_areas || [], digest: n.digest ?? 1, updates: n.updates ?? 1};
   for (const [key, , def] of k.fields) val['cfg_' + key] = (n.config || {})[key] ?? (isNew ? def || '' : '');
   openForm(isNew ? 'Neues Ziel: ' + esc(k.label) : esc(n.name), [
     ['name', 'Name'], ...cf,
     ['areas', 'Bereiche (keiner gewählt = alle)', 'multi', areaOpts], ['events', 'Melden', 'select', Object.entries(NEV)],
     [['quiet_from', 'Ruhezeit von', 'time'], ['quiet_to', 'bis', 'time']],
     ['quiet_areas', 'Ruhezeit gilt für (keiner gewählt = alle Bereiche)', 'multi', areaOpts],
+    ['updates', 'Auch verfügbare Updates melden (Firmware, Pakete)', 'check'],
     ['digest', 'Meldungen aus der Ruhezeit danach gesammelt schicken', 'check'], ['enabled', 'Aktiv', 'check'],
   ], val, async data => {
     const body = {kind: n.kind, config: {}};
@@ -1840,6 +1879,7 @@ const ACT = {
   editVlan: d => vlanForm(vlan(+d.id)),
   delVlan: d => { if (confirm('Netzwerk löschen? Die Geräte bleiben erhalten.')) { closePanel(); run(() => api('DELETE', '/api/vlans/' + d.id)); } },
   scan: d => run(() => api('POST', `/api/vlans/${d.id}/scan`), 'Scan gestartet – Ergebnisse erscheinen unter „Funde“'),
+  updSkip: d => run(() => api('POST', `/api/updates/${d.id}/skip`, {key: d.key, undo: !!d.undo}), d.undo ? 'Wird wieder gemeldet' : 'Übersprungen'),
   staleDo: d => {
     const {open, finds} = staleList(), op = d.op;
     const ids = op === 'discard' ? finds.map(f => f.id) : d.id === 'all' ? open.map(x => x.id) : [+d.id];
