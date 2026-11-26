@@ -129,6 +129,17 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 - **Gatus-Export** der Checks
 - Verlauf: Einzelergebnisse 12 Stunden, Stundenwerte 8 Tage, Ereignisse 30 Tage
 
+## Updates
+- **Firmware- und Update-Stände** aus dem, was die Geräte selbst wissen – HomeAtlas fragt keine Hersteller-Seiten ab und stößt keine Prüfung an:
+  - **UniFi:** Firmware je Gateway, Switch und AP (`upgradable`, Zielversion)
+  - **OPNsense:** installierte und neueste Version aus der letzten Firmware-Prüfung der Firewall (Recht „System: Firmware“)
+  - **Proxmox:** ausstehende Paket-Updates je Node mit pve-manager-Version (Sys.Audit, ältere PVE: Sys.Modify)
+  - **Synology:** verfügbares DSM-Update
+  - **Home Assistant:** alle `update.*`-Entitäten an den übernommenen Geräten (Zigbee-, ESPHome-, Shelly-Firmware …), HA Core, OS und Add-ons am Home-Assistant-Gerät
+- **Anzeige:** oranger Pfeil an Karte und Chip, Abschnitt *Updates* im Geräte-Panel (Quelle, installiert → neu, Hinweise-Link), Liste unter *Überwachung*
+- **Überspringen** einer Version – meldet sich erst wieder, wenn eine neuere erscheint
+- **Benachrichtigung** einmal je neuer Version über die Benachrichtigungsziele (je Ziel abschaltbar, Ruhezeiten gelten), mehrere Updates in einer Nachricht
+
 ## Scan & Funde
 
 - Scan im festen Takt (Standard 60 Minuten) für alle Netze mit „automatisch scannen“ und von Hand je Netz: `nmap -sn`, Port-Scan (rund 50 typische Ports), Web-Titel, SNMP
@@ -183,4 +194,5 @@ Daten aus der OPNsense (beim Abgleich der Anbindung), abgeglichen mit der Dokume
 ## Noch nicht umgesetzt
 
 - Anbindungen für TrueNAS, Checkmk, FRITZ!Box (TR-064), Windows
+- Update-Stände für QNAP und Docker-Images (neuere Images in der Registry)
 - Verschlüsselte Ablage der Zugangsdaten von Anbindungen

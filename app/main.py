@@ -13,14 +13,14 @@ from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, backup, connectors, db, importer, ipam, monitor, notify, scanner, types, insights
+from . import auth, backup, connectors, db, importer, ipam, monitor, notify, scanner, types, updates, insights
 
 STATIC = Path(__file__).parent / "static"
 ICON_CACHE = db.DATA / "icons"
 ICON_SOURCES = ["https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/svg/{}.svg",
                 "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/svg/{}.svg"]
 _icon_miss = {}
-VERSION = "0.28.3"
+VERSION = "0.29.0"
 
 
 def _build_id():
@@ -65,6 +65,7 @@ app.include_router(ipam.router)
 app.include_router(types.router)
 app.include_router(backup.router)
 app.include_router(notify.router)
+app.include_router(updates.router)
 app.include_router(insights.router)
 
 

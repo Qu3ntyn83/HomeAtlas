@@ -183,6 +183,24 @@ def _prune(integ, prefix, seen):
 
 
 # ------------------------------------------------------------------ Proxmox
+def proxmox_updates(px, nn, node_id, os_name):
+    """Ausstehende Paket-Updates des Nodes (Stand des letzten „apt update“ auf dem Node, HomeAtlas stößt keins an).
+    Braucht Sys.Audit (ab PVE 8.4/9) bzw. Sys.Modify bei älteren Versionen."""
+    from . import updates
+    try:
+        pk = px(f"/nodes/{nn}/apt/update") or []
+    except urllib.error.HTTPError as e:
+        return "Paket-Updates: Recht fehlt (Sys.Audit, ältere PVE: Sys.Modify)" if e.code in (401, 403) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+    pm = next((p for p in pk if p.get("Package") == "pve-manager"), None)
+    inst = (os_name or "").replace("Proxmox VE ", "") or None
+    item = {"key": "proxmox:apt", "title": "Paket-Updates", "installed": pm.get("OldVersion") if pm else inst,
+            "latest": pm.get("Version") if pm else None, "available": bool(pk), "count": len(pk)}
+    updates.record(node_id, "proxmox", [item])
+    return f"{len(pk)} Paket-Updates" if pk else "Pakete aktuell"
+
+
 def sync_proxmox(integ):
     c = integ["config"]
     _, phost, pport = endpoint(c, 8006)
@@ -205,7 +223,7 @@ def sync_proxmox(integ):
         return (f"Proxmox: angemeldet, aber {what}. Dem Token {tok} fehlen eigene Leserechte: Datacenter → Permissions → Add → "
                 f"API Token Permission, Pfad „/“, Rolle „PVEAuditor“.")
 
-    seen, n = set(), 0
+    seen, n, apt_notes = set(), 0, []
     nodes = px("/nodes")
     if not nodes:
         raise RuntimeError(rights_hint("es kommt kein Node zurück") or "Proxmox liefert keinen Node")
@@ -232,6 +250,7 @@ def sync_proxmox(integ):
                 db.update("devices", target["id"], {"integration_id": integ["id"], "ext_id": f"node/{nn}"})
         node_id = _upsert(integ, f"node/{nn}", nd, adopt_name=nn)
         seen.add(f"node/{nn}")
+        apt_notes.append(proxmox_updates(px, nn, node_id, nd.get("os")))
         if node.get("status") != "online":
             continue
         for kind, typ in (("qemu", "vm"), ("lxc", "container")):
@@ -267,7 +286,7 @@ def sync_proxmox(integ):
         if hint:
             raise RuntimeError(hint)                # vorhandene Gäste bleiben stehen, statt als verschwunden zu gelten
     _prune(integ, "guest/", seen)
-    return f"{len(nodes)} {'Node' if len(nodes) == 1 else 'Nodes'} · {n} Gäste"
+    return f"{len(nodes)} {'Node' if len(nodes) == 1 else 'Nodes'} · {n} Gäste" + "".join(" · " + a for a in dict.fromkeys(apt_notes) if a)
 
 
 # ------------------------------------------------------------------ Docker
@@ -611,8 +630,51 @@ def sync_opnsense(integ):
         n += 1
     from . import ipam                                # DNS, DHCP und ARP für IPAM – Fehler dort brechen den VLAN-Abgleich nicht ab
     extra = ipam.fetch(integ, cli)
+    fw = opnsense_firmware(integ, cli)
     head = f"{n} VLANs" if n else "verbunden, keine VLANs angelegt"
-    return head + (" · " + extra if extra else "")
+    return head + (" · " + extra if extra else "") + (" · " + fw if fw else "")
+
+
+def opnsense_firmware_parse(r):
+    """Antwort von /api/core/firmware/status → Update-Eintrag (None, wenn nichts Brauchbares drinsteht)."""
+    prod = (r or {}).get("product") or {}
+    inst, latest = prod.get("product_version"), prod.get("product_latest")
+    if not inst and not latest:
+        return None
+    status = str((r or {}).get("status") or "")
+    avail = status in ("update", "upgrade") or bool(inst and latest and _vkey(latest) > _vkey(inst))
+    count = (r or {}).get("updates")
+    try:
+        count = int(count) if count not in (None, "") else None
+    except (TypeError, ValueError):
+        count = None
+    return {"key": "opnsense:firmware", "title": "OPNsense", "installed": inst, "latest": latest or inst,
+            "available": avail, "count": count}
+
+
+def _vkey(v):
+    """Versionsvergleich ohne Zusatzpaket: 24.7.10_1 < 24.7.11 < 25.1."""
+    return [int(x) if x.isdigit() else x for x in re.split(r"[._\-]", str(v or "")) if x]
+
+
+def opnsense_firmware(integ, cli):
+    """Stand der Firmware aus dem letzten Check der OPNsense (sie prüft selbst, HomeAtlas löst keinen Check aus)."""
+    from . import updates
+    try:
+        r = _get(cli.base + "/core/firmware/status", cli.hdr)
+    except urllib.error.HTTPError as e:
+        return "Firmware-Stand: Recht „System: Firmware“ fehlt" if e.code in (401, 403) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+    item = opnsense_firmware_parse(r)
+    if not item:
+        return ""
+    host = endpoint(integ["config"], 443)[1]
+    dev = db.one("SELECT * FROM devices WHERE id=?", (integ.get("device_id") or 0,)) or db.one("SELECT * FROM devices WHERE ip=?", (host,))
+    if not dev:
+        return ""
+    updates.record(dev["id"], "opnsense", [item])
+    return f"Firmware {item['installed']}" + (f" → {item['latest']} verfügbar" if item["available"] else " aktuell")
 
 
 # ------------------------------------------------------------------ gemeinsame Übernahme für NAS und BMC
@@ -863,6 +925,22 @@ def synology_parse(dsm, net, storage=None, system=None):
     return out
 
 
+def synology_update_parse(r, fw):
+    """SYNO.Core.Upgrade.Server/check → Update-Eintrag. Die Felder sind nicht offiziell dokumentiert und je nach DSM
+    verschieden verschachtelt (available/version, update.available/update.version); fehlt beides, gibt es keinen Eintrag."""
+    if not isinstance(r, dict):
+        return None
+    u = r.get("update") if isinstance(r.get("update"), dict) else r
+    avail = u.get("available")
+    if avail is None:
+        return None
+    vd = u.get("version_details") if isinstance(u.get("version_details"), dict) else {}
+    ver = u.get("version") or vd.get("os_version")
+    fw = re.sub(r"^DSM\s*", "", fw or "")
+    return {"key": "synology:dsm", "title": "DSM", "installed": fw, "latest": ver or fw, "available": bool(avail),
+            "url": u.get("release_note") or None}
+
+
 def sync_synology(integ):
     c = integ["config"]
     raw = (c.get("host") or "").strip()
@@ -918,6 +996,10 @@ def sync_synology(integ):
             except RuntimeError:
                 extra.append(None)
         info = synology_parse(dsm, net, *extra)
+        try:                                          # DSM-Update: Stand der eigenen Prüfung des NAS
+            upg = data("SYNO.Core.Upgrade.Server", "check")
+        except RuntimeError:
+            upg = None
     finally:
         try:
             call("SYNO.API.Auth", "logout", maxv=6, session="HomeAtlas")
@@ -928,6 +1010,11 @@ def sync_synology(integ):
     disks = sum(1 for h in info["hw"] if h["icon"] in ("glyph-hdd", "glyph-ssd"))
     warn = f" · ⚠ {info['bad_disks']} Warnung(en) bei Platten/Volumes" if info["bad_disks"] else ""
     miss = "" if extra[0] is not None else " · Speicher nicht lesbar (Administratorrechte nötig)"
+    item = synology_update_parse(upg, info["fw"])
+    if item:
+        from . import updates
+        updates.record(dev["id"], "synology", [item])
+        miss += f" · DSM-Update {item['latest']} verfügbar" if item["available"] else ""
     return f"{info['name'] or host} · {info['model']} · {len(nics)} Netzwerkkarten, {disks} Platten, {len(info['pools'])} Volumes{warn}{miss}"
 
 
@@ -1026,13 +1113,18 @@ HA_TEMPLATE = (
     "{% set ns = namespace(out=[]) %}"
     "{% for did in states | map(attribute='entity_id') | map('device_id') | reject('none') | unique %}"
     "{% set ents = device_entities(did) %}{% set ce = device_attr(did,'primary_config_entry') %}"
+    # Update-Entitäten des Geräts (Firmware von Zigbee-, ESPHome-, Shelly-Geräten, HA selbst, Add-ons …)
+    "{% set up = namespace(l=[]) %}{% for e in ents if e.startswith('update.') %}"
+    "{% set up.l = up.l + [{'e': e, 't': state_attr(e,'title') or state_attr(e,'friendly_name'),"
+    " 'i': state_attr(e,'installed_version'), 'l': state_attr(e,'latest_version'), 'on': is_state(e,'on'),"
+    " 'u': state_attr(e,'release_url')}] %}{% endfor %}"
     "{% set ns.out = ns.out + [{'id': did, 'name': device_attr(did,'name_by_user') or device_attr(did,'name'),"
     " 'mf': device_attr(did,'manufacturer'), 'model': device_attr(did,'model'), 'sw': device_attr(did,'sw_version'),"
     " 'area': area_name(did), 'via': device_attr(did,'via_device_id'),"
     " 'conns': device_attr(did,'connections') | list, 'idents': device_attr(did,'identifiers') | list,"
     " 'entry': device_attr(did,'entry_type'), 'integ': (config_entry_attr(ce,'domain') if ce else none),"
     " 'doms': ents | map('regex_replace','\\\\..*','') | unique | list, 'n': ents | count,"
-    " 'un': ents | select('is_state','unavailable') | list | count}] %}"
+    " 'un': ents | select('is_state','unavailable') | list | count, 'upd': up.l}] %}"
     "{% endfor %}"
     # Netzwerk-Tracker (UniFi, FRITZ!Box …) kennen MAC und IP zusammen – damit lassen sich Geräte zuordnen,
     # die der Scan in fremden VLANs nur mit IP sieht
@@ -1098,6 +1190,7 @@ def sync_homeassistant(integ):
     db.update("integrations", integ["id"], {"config": c})
     chosen = set(c.get("integrations") or [])
     if not chosen:
+        ha_updates(integ, devs, {})                  # HA selbst und Add-ons auch ohne übernommene Integrationen
         return (f"{len(real)} Geräte in {len(avail)} Integrationen gefunden – unter „Bearbeiten“ auswählen, "
                 f"welche Integrationen übernommen werden")
     plan = ha_plan(devs, chosen)
@@ -1190,7 +1283,30 @@ def sync_homeassistant(integ):
             patch["icon"] = None if me.get("icon") else HA_ICONS.get(d["integ"])
         db.update("devices", me["id"], {k: v for k, v in patch.items() if v is not None})
     _prune(integ, "ha/", seen)
-    return f"{new} neu, {upd} aktualisiert, {linked} mit vorhandenen Geräten verknüpft ({', '.join(sorted(chosen))})"
+    nup = ha_updates(integ, devs, ids)
+    return (f"{new} neu, {upd} aktualisiert, {linked} mit vorhandenen Geräten verknüpft ({', '.join(sorted(chosen))})" +
+            (f" · {nup} Updates verfügbar" if nup else ""))
+
+
+def ha_update_items(d):
+    return [{"key": "ha:" + u["e"], "title": (u.get("t") or u["e"]).strip(), "installed": u.get("i"), "latest": u.get("l"),
+             "available": bool(u.get("on")), "url": u.get("u")} for u in d.get("upd") or [] if u.get("e")]
+
+
+def ha_updates(integ, devs, ids):
+    """update.*-Entitäten an die Geräte schreiben. Dienste (HA Core, OS, Supervisor, Add-ons) landen am Home-Assistant-Gerät."""
+    from . import updates
+    n = 0
+    for d in devs:
+        if d.get("entry") == "service" or not ids.get(d["id"]) or not d.get("upd"):
+            continue
+        n += updates.record(ids[d["id"]], "homeassistant", ha_update_items(d))
+    own = [it for d in devs if d.get("entry") == "service" for it in ha_update_items(d)]
+    host = endpoint(integ["config"], 8123, "http")[1]
+    dev = db.one("SELECT * FROM devices WHERE id=?", (integ.get("device_id") or 0,)) or db.one("SELECT * FROM devices WHERE ip=?", (host,))
+    if dev and own:
+        n += updates.record(dev["id"], "homeassistant", own)
+    return n
 
 
 # ------------------------------------------------------------------ UniFi Network
@@ -1382,6 +1498,7 @@ def unifi_parse(devices, clients, wlans=None):
                       "ip": d.get("ip") or "", "type": UNIFI_TYPES.get(t, "other"), "kind": t,
                       "model": d.get("model_name") or d.get("model") or "", "fw": d.get("version") or "",
                       "online": d.get("state") == 1, "ports": len(d.get("port_table") or []),
+                      "upgradable": bool(d.get("upgradable")), "upgrade_to": d.get("upgrade_to_firmware") or "",
                       "clients": d.get("num_sta") or (d.get("user-num_sta") or 0) + (d.get("guest-num_sta") or 0)})
     links = []
     for d in devices:
@@ -1453,6 +1570,7 @@ def sync_unifi(integ):
             wlans = []                                   # Leserecht auf WLAN-Einstellungen ist nicht nötig
     finally:
         cli.logout()
+    from . import updates
     data = unifi_parse(devices, clients, wlans)
     url = f"{cli.scheme}://{cli.host}:{cli.port}"
     found = ""
@@ -1469,6 +1587,9 @@ def sync_unifi(integ):
             "mac": d["mac"], "vendor": "Ubiquiti", "icon": "unifi", "url": url,
             "status": "online" if d["online"] else "offline", "last_seen": now if d["online"] else None,
             "meta": {"unifi": {"kind": d["kind"], "ports": d["ports"], "clients": d["clients"]}}}, adopt_ip=d["ip"] or None, adopt_mac=d["mac"])
+        if d["fw"]:
+            updates.record(ids[d["mac"]], "unifi", [{"key": "unifi:firmware", "title": "Firmware", "installed": d["fw"],
+                                                     "latest": d["upgrade_to"] or d["fw"], "available": d["upgradable"]}])
     _prune(integ, "unifi/", seen)
     managed = tuple(ids.values())
     # WLANs: fehlende SSIDs anlegen, leere Angaben ergänzen
@@ -1548,12 +1669,13 @@ def sync_unifi(integ):
         if d["ext_id"] not in live:
             db.update("devices", d["id"], {"status": "offline"})
     aps = sum(1 for d in data["infra"] if d["type"] == "ap")
+    fwup = sum(1 for d in data["infra"] if d["upgradable"])
     sws = sum(1 for d in data["infra"] if d["type"] == "switch")
     off = sum(1 for d in data["infra"] if not d["online"])
     rest = len(data["clients"]) - matched - new
     return (f"{len(data['infra'])} UniFi-Geräte ({aps} APs, {sws} Switches{f', {off} offline' if off else ''}), "
             f"{len(data['clients'])} Clients: {matched} zugeordnet" + (f", {new} angelegt" if new else "") +
-            (f", {rest} unbekannt" if rest and not create else "") + f" · {made} neue Verbindungen" + found)
+            (f", {rest} unbekannt" if rest and not create else "") + f" · {made} neue Verbindungen" + (f" · {fwup} Firmware-Updates" if fwup else "") + found)
 
 
 from typing import Protocol
